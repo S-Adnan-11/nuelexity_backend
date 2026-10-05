@@ -34,3 +34,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 /generated/prisma
+
+# Keep credentials, captured sessions, and local Supabase state out of Git.
+.env.*
+!.env.example
+*.har
+supabase/.temp/
+supabase/.branches/
+docs/
+AGENTS.md

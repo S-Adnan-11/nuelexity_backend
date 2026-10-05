@@ -1,0 +1,7 @@
+node_modules/
+bun.lock
+.env*
+supabase/
+prisma/
+index.ts
+# index.ts contains the deliberately preserved dummy handler.
