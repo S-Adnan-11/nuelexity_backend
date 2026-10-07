@@ -46,6 +46,15 @@ export function readConfig(env: Record<string, string | undefined> = process.env
   const turnstileSecret = env.TURNSTILE_SECRET_KEY || "";
   const groqKey = env.GROQ_API_KEY || "";
   const tavilyKey = env.TAVILY_API_KEY || "";
+  // List setting names only. No key values in diagnostics sha.
+  const missingSettings = [
+    !supabaseUrl && "SUPABASE_URL",
+    !secret && "SUPABASE_SECRET_KEY",
+    !publicKey && "SUPABASE_PUBLISHABLE_KEY",
+    guestSecret.length < 32 && "GUEST_ID_SECRET (at least 32 characters)",
+    !tavilyKey && "TAVILY_API_KEY",
+    config.aiProvider === "groq" && !groqKey && "GROQ_API_KEY",
+  ].filter((name): name is string => Boolean(name));
   return {
     ...config,
     origins,
@@ -57,15 +66,9 @@ export function readConfig(env: Record<string, string | undefined> = process.env
     turnstileSecret,
     groqKey,
     tavilyKey,
-    groqModel: env.GROQ_MODEL || "llama-3.3-70b-versatile",
-    configured: Boolean(
-      supabaseUrl &&
-        secret &&
-        publicKey &&
-        guestSecret.length >= 32 &&
-        tavilyKey &&
-        (config.aiProvider !== "groq" || groqKey),
-    ),
+    groqModel: env.GROQ_MODEL || "openai/gpt-oss-20b",
+    missingSettings,
+    configured: missingSettings.length === 0,
     guestsEnabled: !production || Boolean(turnstileSecret),
   };
 }

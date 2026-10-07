@@ -10,6 +10,7 @@ import type { Config } from "./lib/config";
 import { AppError, publicError } from "./lib/errors";
 import { createProviders } from "./lib/providers";
 import { createStore } from "./lib/store";
+import { issueGuestSession, verifyGuestSession } from "./lib/guest-session";
 import type { Message, Providers, Source, Store } from "./lib/types";
 
 const askSchema = z
@@ -50,7 +51,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
     cors({
       origin: config.origins,
       methods: ["GET", "POST", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization"],
+      allowedHeaders: ["Content-Type", "Authorization", "X-Guest-Pass"],
       exposedHeaders: ["Retry-After"],
     }),
   );
@@ -89,6 +90,55 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       throw new AppError(503, "NOT_CONFIGURED", "Search configuration is incomplete.");
     await store.ready();
     res.json({ status: "ready" });
+  });
+  const guestIpHash = (req: Request) =>
+    createHmac("sha256", config.guestSecret)
+      .update(req.ip || req.socket.remoteAddress || "unknown")
+      .digest("hex");
+  const guestPass = (req: Request) =>
+    verifyGuestSession(config.guestSecret, req.get("X-Guest-Pass") || "", guestIpHash(req));
+  const checkGuestSetup = () => {
+    if (!config.configured)
+      throw new AppError(503, "NOT_CONFIGURED", "Guest search setup is incomplete.");
+    if (!config.guestsEnabled)
+      throw new AppError(503, "GUESTS_UNAVAILABLE", "Guest search is not enabled yet. Please sign in.");
+  };
+  app.get("/guest/session", (req, res) => {
+    checkGuestSetup();
+    const session = guestPass(req);
+    res.json({
+      verified: !!session,
+      verificationRequired: !!config.turnstileSecret || config.production,
+      guestId: session?.guestId || null,
+      expiresAt: session?.expiresAt || null,
+    });
+  });
+  app.post("/guest/session", async (req, res) => {
+    checkGuestSetup();
+    if (!config.turnstileSecret)
+      throw new AppError(503, "BOT_CHECK_UNAVAILABLE", "Guest verification is not enabled here.");
+    const input = z
+      .object({ turnstileToken: z.string().min(1).max(2048) })
+      .strict()
+      .safeParse(req.body);
+    if (!input.success)
+      throw new AppError(400, "BOT_CHECK_REQUIRED", "Complete the verification before searching.");
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.on("close", onClose);
+    try {
+      await providers.verifyGuest(
+        input.data.turnstileToken,
+        req.ip || req.socket.remoteAddress || "unknown",
+        AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+      );
+      controller.signal.throwIfAborted();
+      res.json(issueGuestSession(config.guestSecret, guestIpHash(req)));
+    } finally {
+      res.off("close", onClose);
+    }
   });
   app.get(["/conversation", "/conversations"], async (req, res) => {
     const userId = (await authenticate(req, store, true))!;
@@ -179,7 +229,17 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
     };
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     try {
-      if (!userId) await providers.verifyGuest(input.turnstileToken || "", ip, signal);
+      if (!userId) {
+        checkGuestSetup();
+        if (req.get("X-Guest-Pass")) {
+          if (!guestPass(req))
+            throw new AppError(
+              403,
+              "BOT_SESSION_EXPIRED",
+              "Your guest verification expired. Please verify again.",
+            );
+        } else await providers.verifyGuest(input.turnstileToken || "", ip, signal);
+      }
       let history: Message[] = [];
       if (userId && conversationId) {
         history = (await store.detail(userId, conversationId)).messages;
@@ -249,7 +309,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
           throw new AppError(
             502,
             "ANSWER_LIMIT",
-            "This answer is too long. Try a narrower question.",
+            "Pardon we're still underr development and we set some limitations\n This answer is too long. Try a narrower question.",
           );
         answer += text;
         send("delta", { text });

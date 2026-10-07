@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check": "bun run typecheck && bun test",
+    "config:check": "bun scripts/check-config.ts",
     "db:inspect": "bun scripts/inspect-database.ts"
   },
   "dependencies": {

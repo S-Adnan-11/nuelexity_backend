@@ -80,6 +80,66 @@ test("Groq streams all deltas and requires successful finish plus done", async (
     else await expect(collect()).rejects.toThrow();
   }
 });
+test("GPT-OSS streams only final answer content with a bounded request and no automatic retry", async () => {
+  let calls = 0;
+  const http = (async (_url: string, options: RequestInit) => {
+    calls++;
+    const body = JSON.parse(options.body as string);
+    expect(body).toMatchObject({
+      model: "openai/gpt-oss-20b",
+      reasoning_effort: "low",
+      include_reasoning: false,
+      max_completion_tokens: 1024,
+      stream: true,
+    });
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("reasoning_format");
+    return new Response(
+      packets(
+        'data: {"choices":[{"delta":{"reasoning":"private reasoning"}}]}\n\n' +
+          'data: {"choices":[{"delta":{"content":"Grounded answer [1]"},"finish_reason":"stop"}]}\n\n' +
+          "data: [DONE]\n\n",
+      ),
+    );
+  }) satisfies ProviderFetch;
+  let answer = "";
+  for await (const delta of createProviders(readConfig({ AI_PROVIDER: "groq" }), http).answer(
+    "question",
+    [{ id: 1, title: "Evidence", url: "https://example.org", snippet: "Facts" }],
+    [],
+    signal,
+  ))
+    answer += delta;
+  expect(answer).toBe("Grounded answer [1]");
+  expect(calls).toBe(1);
+});
+test("optional Qwen model stays within the same request budget and excludes reasoning", async () => {
+  const http = (async (_url: string, options: RequestInit) => {
+    expect(JSON.parse(options.body as string)).toMatchObject({
+      model: "qwen/qwen3.8-27b",
+      reasoning_effort: "none",
+      include_reasoning: false,
+      max_completion_tokens: 1024,
+    });
+    return new Response(
+      packets(
+        'data: {"choices":[{"delta":{"content":"Answer"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      ),
+    );
+  }) satisfies ProviderFetch;
+  let result = "";
+  for await (const delta of createProviders(
+    readConfig({ AI_PROVIDER: "groq", GROQ_MODEL: "qwen/qwen3.8-27b" }),
+    http,
+  ).answer(
+    "question",
+    [{ id: 1, title: "Source", url: "https://example.org", snippet: "Evidence" }],
+    [],
+    signal,
+  ))
+    result += delta;
+  expect(result).toBe("Answer");
+});
 test("production guest search cannot bypass missing or failed bot verification", async () => {
   await expect(
     createProviders(readConfig({ NODE_ENV: "production" })).verifyGuest("", "127.0.0.1", signal),

@@ -3,6 +3,8 @@ import type { Server } from "node:http";
 import { createApp } from "../app";
 import { readConfig } from "../lib/config";
 import { AppError } from "../lib/errors";
+import { createHmac } from "node:crypto";
+import { issueGuestSession } from "../lib/guest-session";
 import type { Conversation, Message, Providers, Store } from "../lib/types";
 
 const owner = "11111111-1111-4111-8111-111111111111",
@@ -26,6 +28,8 @@ async function fixture(
     providers?: Partial<Providers>;
     configured?: boolean;
     timeout?: number;
+    turnstile?: boolean;
+    config?: Partial<ReturnType<typeof readConfig>>;
   } = {},
 ) {
   const calls = {
@@ -92,6 +96,8 @@ async function fixture(
     configured: overrides.configured !== false,
     guestSecret: "test-secret".repeat(4),
     requestTimeoutMs: overrides.timeout || 1000,
+    turnstileSecret: overrides.turnstile ? "test-secret" : "",
+    ...overrides.config,
   };
   const server = createApp({ config, store, providers }).listen(0, "127.0.0.1");
   servers.push(server);
@@ -110,8 +116,120 @@ async function fixture(
       body: JSON.stringify(body),
       signal,
     });
-  return { base, ask, calls };
+  return { base, ask, calls, config };
 }
+
+describe("guest verification session", () => {
+  test("one verified pass covers repeated searches and refreshed session checks without resetting quota identity", async () => {
+    const { base, ask, calls } = await fixture({ turnstile: true });
+    expect(
+      ((await (await fetch(`${base}/guest/session`)).json()) as { verified: boolean }).verified,
+    ).toBe(false);
+    const verified = await fetch(`${base}/guest/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnstileToken: "valid" }),
+    });
+    const session = (await verified.json()) as ReturnType<typeof issueGuestSession>;
+    expect(verified.status).toBe(200);
+    expect(calls.guestChecks).toBe(1);
+    expect(calls.reserves).toBe(0);
+    expect(calls.searches).toBe(0);
+    const headers = { "X-Guest-Pass": session.pass, "Content-Type": "application/json" };
+    expect(
+      ((await (await fetch(`${base}/guest/session`, { headers })).json()) as { verified: boolean })
+        .verified,
+    ).toBe(true);
+    for (let i = 0; i < 2; i++) {
+      const response = await fetch(`${base}/nuelexity_ask`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query: "question" }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(calls.guestChecks).toBe(1);
+    expect(calls.reserves).toBe(2);
+    expect(calls.identities[0]).toBe(calls.identities[1]);
+    await (await ask({ query: "legacy client", turnstileToken: "valid" })).text();
+    expect(calls.identities[2]).toBe(calls.identities[0]);
+    const fresh = (await (
+      await fetch(`${base}/guest/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turnstileToken: "new-valid" }),
+      })
+    ).json()) as ReturnType<typeof issueGuestSession>;
+    expect(fresh.guestId).not.toBe(session.guestId);
+    await (
+      await fetch(`${base}/nuelexity_ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Guest-Pass": fresh.pass },
+        body: JSON.stringify({ query: "new guest ID" }),
+      })
+    ).text();
+    expect(calls.identities[3]).toBe(calls.identities[0]);
+  });
+  test("invalid proof and failed challenges cannot reserve quota or call providers", async () => {
+    const { base, calls } = await fixture({
+      turnstile: true,
+      providers: {
+        verifyGuest: async () => {
+          throw new AppError(403, "BOT_CHECK_FAILED", "Try again.");
+        },
+      },
+    });
+    const failure = await fetch(`${base}/guest/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnstileToken: "bad" }),
+    });
+    expect(failure.status).toBe(403);
+    expect(await failure.text()).not.toContain("pass");
+    expect(
+      (
+        (await (
+          await fetch(`${base}/guest/session`, { headers: { "X-Guest-Pass": "forged" } })
+        ).json()) as { verified: boolean }
+      ).verified,
+    ).toBe(false);
+    const rejected = await fetch(`${base}/nuelexity_ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Guest-Pass": "forged" },
+      body: JSON.stringify({ query: "question" }),
+    });
+    expect(rejected.status).toBe(403);
+    expect(((await rejected.json()) as { error: { code: string } }).error.code).toBe(
+      "BOT_SESSION_EXPIRED",
+    );
+    expect(calls.reserves).toBe(0);
+    expect(calls.searches).toBe(0);
+  });
+  test("development bypass cannot issue a verified pass and disabled production guests cannot use old passes", async () => {
+    const development = await fixture();
+    const attempt = await fetch(`${development.base}/guest/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turnstileToken: "fake" }),
+    });
+    expect(attempt.status).toBe(503);
+    expect(development.calls.guestChecks).toBe(0);
+    const production = await fixture({ config: { production: true, guestsEnabled: false } });
+    const ip = createHmac("sha256", production.config.guestSecret)
+      .update("127.0.0.1")
+      .digest("hex");
+    const pass = issueGuestSession(production.config.guestSecret, ip).pass;
+    const blocked = await fetch(`${production.base}/nuelexity_ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Guest-Pass": pass },
+      body: JSON.stringify({ query: "cannot bypass disabled guests" }),
+    });
+    expect(blocked.status).toBe(503);
+    expect(production.calls.reserves).toBe(0);
+    expect(production.calls.searches).toBe(0);
+  });
+});
 
 describe("HTTP search contract", () => {
   test("guests get every delta, numbered sources, follow-ups and one done event", async () => {

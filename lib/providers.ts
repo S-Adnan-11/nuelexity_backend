@@ -94,6 +94,12 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           stream: true,
           temperature: 0.2,
           max_completion_tokens: 1024,
+          // GPT-OSS reasons too. Keep effort small and stream only its final answer.
+          ...(["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(config.groqModel)
+            ? { reasoning_effort: "low", include_reasoning: false }
+            : config.groqModel === "qwen/qwen3.8-27b"
+              ? { reasoning_effort: "none", include_reasoning: false }
+              : {}),
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: buildPrompt(query, sources, history) },

@@ -30,6 +30,11 @@ app.post("/requestlity_nuelexity", async (req, res) => {
 
 if (import.meta.main) {
   const config = readConfig();
+  if (!config.configured) {
+    console.warn(`Search setup incomplete: ${config.missingSettings.join(", ")}`);
+    if (config.missingSettings.includes("GROQ_API_KEY") && process.env.GROK_API_KEY)
+      console.warn("Rename GROK_API_KEY to GROQ_API_KEY for the Groq provider.");
+  }
   const server = app.listen(config.port, () => console.log(`Nuelexity backend running on port ${config.port}`));
   server.headersTimeout = 10000;
   server.requestTimeout = 15000;

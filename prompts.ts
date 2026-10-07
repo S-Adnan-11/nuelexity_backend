@@ -21,7 +21,7 @@ export function buildPrompt(query: string, sources: Source[], history: Message[]
 }
 
 export function followUps(query: string) {
-  // Useful directions without paying for a second model call sha.
+  // Useful directions without having to pay for a second model call.
   const topic = query.slice(0, 140);
   return [
     `What are the key facts about ${topic}?`,
