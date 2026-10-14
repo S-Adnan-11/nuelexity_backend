@@ -1,3 +1,4 @@
+import type { ModelAttribution, ModelCatalogue } from "./models";
 export interface Source {
   id: number;
   title: string;
@@ -12,12 +13,15 @@ export interface Message {
   followUps: string[];
   status: "complete" | "failed";
   created_at: string;
+  model?: ModelAttribution | null;
+  answerKind?: "ai" | "sources-only" | "no-sources" | null;
 }
 export interface Conversation {
   id: string;
   title: string;
   created_at: string;
   updated_at: string;
+  selected_model?: string | null;
 }
 export interface Reservation {
   allowed: boolean;
@@ -35,7 +39,8 @@ export interface Store {
   list(userId: string, offset: number): Promise<Conversation[]>;
   detail(userId: string, id: string): Promise<{ conversation: Conversation; messages: Message[] }>;
   remove(userId: string, id: string): Promise<void>;
-  create(userId: string, query: string): Promise<Conversation>;
+  create(userId: string, query: string, modelId?: string): Promise<Conversation>;
+  setModel(userId: string, id: string, modelId: string): Promise<void>;
   save(
     userId: string,
     conversationId: string,
@@ -46,12 +51,15 @@ export interface Store {
   ready(): Promise<void>;
 }
 export interface Providers {
+  models(): Promise<ModelCatalogue>;
   search(query: string, signal: AbortSignal): Promise<Source[]>;
   answer(
     query: string,
     sources: Source[],
     history: Message[],
     signal: AbortSignal,
-  ): AsyncIterable<string>;
+    modelId?: string,
+    maxOutputTokens?: number,
+  ): AsyncGenerator<string, ModelAttribution | null>;
   verifyGuest(token: string, ip: string, signal: AbortSignal): Promise<void>;
 }

@@ -32,9 +32,13 @@ OAuth accounts live in `auth.users`. New conversations reference that Auth ID di
 
 Guest visitors complete Turnstile once and exchange it for an IP-bound server-signed pass. The frontend reuses it across refreshes in the same tab for at most two hours. Every search still passes durable quotas; a new guest ID cannot reset the IP-based allowance. See [guest session contract](docs/API.md#guest-verification-session). No dashboard change or database migration is required for this flow.
 
-Other available models in the configured account: `openai/gpt-oss-120b` and `qwen/qwen3.8-27b`, also listed in [Groq's free-plan limits](https://console.groq.com/docs/rate-limits). Select explicitly with `GROQ_MODEL` and restart the backend. GPT-OSS uses low reasoning effort; Qwen disables reasoning and is currently a preview model. Both keep the same 1024-token output limit and one provider request, with no tools, automatic retries, or fallback. Keep `openai/gpt-oss-20b` as the default for now.
+Signed-in users can select GPT-OSS 20B, GPT-OSS 120B, or Qwen 3.8 27B (Preview) near the chat composer. `GET /models` supplies the backend-approved catalogue; guests are restricted to `GROQ_MODEL`, currently GPT-OSS 20B. Per-request selection requires no restart. Conversation choices persist, each successful answer records the actual provider-confirmed model, and old answers display “Model unknown”. All choices share the existing quotas and 1024-token output cap; no fallback or automatic retry is used.
 
-## External configuration still required
+## Current model-selection adoption
+
+All three candidates passed one bounded live generation with the existing key. The new additive [model-selection migration](supabase/migrations/202610140001_model_selection.sql) is the outstanding external requirement; remote zero-row checks confirm its columns are absent. Apply it once, run the [read-only SQL verification](supabase/verification/202610140001_model_selection.sql), then `bun scripts/check-model-schema.ts` and check `/ready`. Existing environment values, the Free account and Turnstile setup stay as configured. See [exact instructions, checks and owner review](docs/MODEL_SELECTION.md). Do not rerun the foundation migrations.
+
+## First-time deployment configuration reference
 
 1. Run both migrations in order in the correct Supabase project. Verify legacy table RLS with the read-only audit in `docs/DATABASE.md`. Do not rerun the historical destructive migration 2.
 2. In Supabase Auth, enable Google/GitHub and allow `http://localhost:3000/auth/callback` plus your future deployed callback URL. Provider application callback URLs point to Supabase's `/auth/v1/callback`, not directly to Nuelexity. Keep provider OAuth client secrets in Supabase, not the browser.

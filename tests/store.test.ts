@@ -94,3 +94,26 @@ test("database error payloads are not exposed", async () => {
     expect((error as Error).message).toContain("Database request failed");
   }
 });
+
+test("selection writes filter by owner and store attribution without inventing legacy metadata", async () => {
+  let selected = "openai/gpt-oss-20b";
+  const actual = { id: "qwen/qwen3.8-27b", name: "Qwen 3.8 27B", provider: "Groq", preview: true };
+  let saved: any;
+  const store = createStore(config, async (url, options) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("nuelexity_conversations")) {
+      expect(parsed.searchParams.get("user_id")).toBe(`eq.${owner}`);
+      if (options.method === "PATCH") selected = JSON.parse(options.body as string).selected_model;
+      return Response.json([{ id, title: "Owned", selected_model: selected }]);
+    }
+    if (options.method === "POST") { saved = JSON.parse(options.body as string); return new Response(null, {status: 201}); }
+    return Response.json([{ id: "old", role: "assistant", content: "Old", follow_ups: [], sources: [], status: "complete", created_at: "now" }]);
+  });
+  await store.setModel(owner, id, actual.id);
+  const detail = await store.detail(owner, id);
+  expect(detail.conversation.selected_model).toBe(actual.id);
+  expect(detail.messages[0]?.model).toBeNull();
+  expect(detail.messages[0]?.answerKind).toBeNull();
+  await store.save(owner, id, { role: "assistant", content: "Answer", sources: [], followUps: [], status: "complete", model: actual as any, answerKind: "ai" });
+  expect(saved).toMatchObject({ user_id: owner, conversation_id: id, model: actual, answer_kind: "ai" });
+});

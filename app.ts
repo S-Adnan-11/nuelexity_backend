@@ -12,11 +12,14 @@ import { createProviders } from "./lib/providers";
 import { createStore } from "./lib/store";
 import { issueGuestSession, verifyGuestSession } from "./lib/guest-session";
 import type { Message, Providers, Source, Store } from "./lib/types";
+import { APPROVED_MODELS, selectModel } from "./lib/models";
+import type { ModelAttribution } from "./lib/models";
 
 const askSchema = z
   .object({
     query: z.string().trim().min(1).max(1000),
     conversationId: z.uuid().optional(),
+    modelId: z.string().min(1).max(100).optional(),
     turnstileToken: z.string().max(2048).optional(),
     history: z
       .array(
@@ -50,7 +53,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
   app.use(
     cors({
       origin: config.origins,
-      methods: ["GET", "POST", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "X-Guest-Pass"],
       exposedHeaders: ["Retry-After"],
     }),
@@ -90,6 +93,10 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       throw new AppError(503, "NOT_CONFIGURED", "Search configuration is incomplete.");
     await store.ready();
     res.json({ status: "ready" });
+  });
+  app.get("/models", async (req, res) => {
+    const userId = await authenticate(req, store);
+    res.json({ ...(await providers.models()), canSelect: !!userId, answerMode: config.aiProvider === "groq" ? "ai" : "sources-only" });
   });
   const guestIpHash = (req: Request) =>
     createHmac("sha256", config.guestSecret)
@@ -160,6 +167,16 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
     await store.remove(userId, uuid(req.params.id));
     res.status(204).end();
   });
+  app.put("/conversations/:id/model", async (req, res) => {
+    const userId = (await authenticate(req, store, true))!;
+    const id = uuid(req.params.id);
+    const parsed = z.object({ modelId: z.string().min(1).max(100) }).strict().safeParse(req.body);
+    if (!parsed.success) throw new AppError(400, "INVALID_REQUEST", "Select a valid model.");
+    await store.detail(userId, id);
+    const model = selectModel(await providers.models(), parsed.data.modelId, userId);
+    await store.setModel(userId, id, model.id);
+    res.json({ selectedModelId: model.id });
+  });
   app.post(["/signup", "/login"], (_req, res) =>
     res
       .status(410)
@@ -184,6 +201,11 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       );
     const userId = await authenticate(req, store);
     const input = parsed.data;
+    // Reject forged model IDs and guest overrides before bot/provider work.
+    if (input.modelId && !APPROVED_MODELS.some((model) => model.id === input.modelId))
+      throw new AppError(400, "UNKNOWN_MODEL", "This model is no longer supported. Select an available model.");
+    if (!userId && input.modelId && input.modelId !== config.groqModel)
+      throw new AppError(403, "MODEL_SIGN_IN_REQUIRED", "Sign in to choose a different model.");
     if (!userId && input.conversationId)
       throw new AppError(401, "UNAUTHORIZED", "Sign in to continue a saved conversation.");
     if (userId && input.history)
@@ -223,6 +245,8 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       sources: Source[] = [],
       savedUser = false,
       savedAssistant = false;
+    let actualModel: ModelAttribution | null = null;
+    let requestedModel = input.modelId || config.groqModel;
     const send = (event: string, data: unknown) => {
       signal.throwIfAborted();
       if (!res.destroyed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -242,7 +266,9 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       }
       let history: Message[] = [];
       if (userId && conversationId) {
-        history = (await store.detail(userId, conversationId)).messages;
+        const detail = await store.detail(userId, conversationId);
+        history = detail.messages;
+        requestedModel = input.modelId || detail.conversation.selected_model || config.groqModel;
         if (history.length >= 60)
           throw new AppError(409, "THREAD_LIMIT", "This thread is full. Start a new search.");
       } else if (!userId)
@@ -254,6 +280,10 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
           status: "complete",
           created_at: "",
         }));
+      // Freeze the selected model before acquiring a lease. A concurrent selector
+      // update persists the next choice without relabelling this request.
+      if (config.aiProvider === "groq")
+        selectModel(await providers.models(), requestedModel, userId);
       signal.throwIfAborted();
       const reservation = await store.reserve(identity, requestId);
       if (!reservation.allowed)
@@ -271,7 +301,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
         if (history.length >= 60)
           throw new AppError(409, "THREAD_LIMIT", "This thread is full. Start a new search.");
       }
-      if (userId && !conversationId) conversationId = (await store.create(userId, input.query)).id;
+      if (userId && !conversationId) conversationId = (await store.create(userId, input.query, requestedModel)).id;
       if (userId && conversationId) {
         await store.save(userId, conversationId, {
           role: "user",
@@ -291,6 +321,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
         conversationId,
         answerMode: config.aiProvider === "none" ? "sources-only" : "ai",
         remaining: reservation.remaining,
+        requestedModelId: config.aiProvider === "groq" ? requestedModel : null,
       });
       send("status", { stage: "searching" });
       heartbeat = setInterval(() => {
@@ -304,15 +335,26 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       sources = await providers.search(retrievalQuery, signal);
       send("sources", { sources });
       send("status", { stage: "answering" });
-      for await (const text of providers.answer(input.query, sources, history, signal)) {
-        if (answer.length + text.length > 12000)
-          throw new AppError(
-            502,
-            "ANSWER_LIMIT",
-            "Pardon we're still underr development and we set some limitations\n This answer is too long. Try a narrower question.",
-          );
-        answer += text;
-        send("delta", { text });
+      const generation = providers.answer(input.query, sources, history, signal, requestedModel);
+      try {
+        while (true) {
+          const chunk = await generation.next();
+          if (chunk.done) {
+            actualModel = chunk.value;
+            break;
+          }
+          const text = chunk.value;
+          if (answer.length + text.length > 12000)
+            throw new AppError(
+              502,
+              "ANSWER_LIMIT",
+              "Pardon we're still underr development and we set some limitations\n This answer is too long. Try a narrower question.",
+            );
+          answer += text;
+          send("delta", { text });
+        }
+      } finally {
+        await generation.return(null);
       }
       if (!answer.trim())
         throw new AppError(
@@ -322,6 +364,9 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
         );
       signal.throwIfAborted();
       const suggestions = followUps(input.query);
+      const answerKind = !sources.length ? "no-sources" : config.aiProvider === "none" ? "sources-only" : "ai";
+      if (answerKind === "ai" && (!actualModel || actualModel.id !== requestedModel))
+        throw new AppError(502, "MODEL_UNCONFIRMED", "The answer's model could not be confirmed. Try again later.");
       if (userId && conversationId) {
         await store.save(userId, conversationId, {
           role: "assistant",
@@ -329,11 +374,13 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
           sources,
           followUps: suggestions,
           status: "complete",
+          model: actualModel,
+          answerKind,
         });
         savedAssistant = true;
       }
       send("follow_ups", { questions: suggestions });
-      send("done", { conversationId });
+      send("done", { conversationId, model: actualModel, answerKind });
       res.end();
     } catch (error) {
       const failure = publicError(signal.aborted ? signal.reason : error);
@@ -351,7 +398,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       if (!res.headersSent) throw failure;
       if (!res.destroyed) {
         res.write(
-          `event: error\ndata: ${JSON.stringify({ code: failure.code, message: failure.message })}\n\n`,
+          `event: error\ndata: ${JSON.stringify({ code: failure.code, message: failure.message, retryAfter: failure.retryAfter })}\n\n`,
         );
         res.end();
       }

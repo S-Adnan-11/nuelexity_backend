@@ -1,9 +1,11 @@
 import { z } from "zod";
-import { buildPrompt, SYSTEM_PROMPT } from "../prompts";
+import { boundedPrompt, SYSTEM_PROMPT } from "../prompts";
 import type { Config } from "./config";
 import { AppError } from "./errors";
 import { readSse } from "./sse";
 import type { Providers, Source } from "./types";
+import { APPROVED_MODELS, modelCatalogue } from "./models";
+import type { ModelAttribution, ModelCatalogue } from "./models";
 
 export function safeUrl(value: string): string | null {
   try {
@@ -29,7 +31,57 @@ const resultsSchema = z.object({
 
 export type ProviderFetch = (url: string, options: RequestInit) => Promise<Response>;
 export function createProviders(config: Config, http: ProviderFetch = fetch): Providers {
+  let cached: { catalogue: ModelCatalogue; expiresAt: number } | undefined;
+  let pending: Promise<ModelCatalogue> | undefined;
+  const blocked = new Map<string, { until: number; reason: string }>();
+  async function models(): Promise<ModelCatalogue> {
+    if (config.aiProvider !== "groq") return modelCatalogue(config, new Set());
+    if (!cached || cached.expiresAt <= Date.now()) {
+      pending ??= (async () => {
+        const response = await http("https://api.groq.com/openai/v1/models", {
+          headers: { Authorization: `Bearer ${config.groqKey}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok)
+          throw new AppError(
+            503,
+            "MODEL_CATALOGUE_UNAVAILABLE",
+            "Model availability could not be checked. Refresh models and try again.",
+          );
+        const parsed = z.object({
+          data: z.array(z.object({ id: z.string(), active: z.boolean().optional() })),
+        }).safeParse(await response.json());
+        if (!parsed.success)
+          throw new AppError(
+            503,
+            "MODEL_CATALOGUE_UNAVAILABLE",
+            "Model availability could not be checked. Refresh models and try again.",
+          );
+        const catalogue = modelCatalogue(
+          config,
+          new Set(parsed.data.data.filter((model) => model.active !== false).map((model) => model.id)),
+        );
+        cached = { catalogue, expiresAt: Date.now() + 60000 };
+        return catalogue;
+      })();
+      try {
+        await pending;
+      } finally {
+        pending = undefined;
+      }
+    }
+    return {
+      ...cached!.catalogue,
+      models: cached!.catalogue.models.map((model) => {
+        const failure = blocked.get(model.id);
+        return failure && failure.until > Date.now()
+          ? { ...model, available: false, unavailableReason: failure.reason }
+          : { ...model };
+      }),
+    };
+  }
   return {
+    models,
     async search(query, signal) {
       // Explicitly disable upgrades/research/extra answer calls. Basic = one credit.
       const response = await http("https://api.tavily.com/search", {
@@ -73,10 +125,10 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
       }
       return sources;
     },
-    async *answer(query, sources, history, signal) {
+    async *answer(query, sources, history, signal, modelId = config.groqModel, maxOutputTokens) {
       if (!sources.length) {
         yield "I couldn't find usable sources for this question. Try a more specific search.";
-        return;
+        return null;
       }
       if (config.aiProvider === "none") {
         yield "Sources-only mode: these are retrieved excerpts, not an AI-synthesized answer.\n\n";
@@ -84,29 +136,63 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           signal.throwIfAborted();
           yield `${source.title} [${source.id}]\n${source.snippet || "Open this source to read more."}\n\n`;
         }
-        return;
+        return null;
+      }
+      const approved = APPROVED_MODELS.find((model) => model.id === modelId);
+      if (!approved) throw new AppError(400, "UNKNOWN_MODEL", "Select an approved model.");
+      // The route has already checked live availability and reserved quota.
+      const model = modelCatalogue(config, new Set([modelId])).models.find(
+        (model) => model.id === modelId,
+      )!;
+      let prompt: string;
+      try {
+        prompt = boundedPrompt(query, sources, history, model.maxInputBytes);
+      } catch {
+        throw new AppError(
+          400,
+          "INPUT_LIMIT",
+          "This question exceeds the model input limit. Try a shorter question.",
+        );
       }
       const response = await http("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: { Authorization: `Bearer ${config.groqKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: config.groqModel,
+          model: modelId,
           stream: true,
           temperature: 0.2,
-          max_completion_tokens: 1024,
+          max_completion_tokens: Math.min(
+            model.maxOutputTokens,
+            Math.max(1, maxOutputTokens ?? model.maxOutputTokens),
+          ),
           // GPT-OSS reasons too. Keep effort small and stream only its final answer.
-          ...(["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(config.groqModel)
+          ...(["openai/gpt-oss-20b", "openai/gpt-oss-120b"].includes(modelId)
             ? { reasoning_effort: "low", include_reasoning: false }
-            : config.groqModel === "qwen/qwen3.8-27b"
+            : modelId === "qwen/qwen3.8-27b"
               ? { reasoning_effort: "none", include_reasoning: false }
               : {}),
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: buildPrompt(query, sources, history) },
+            { role: "user", content: prompt },
           ],
         }),
         signal,
       });
+      if ([403, 404].includes(response.status)) {
+        const permission = response.status === 403;
+        const message = permission
+          ? "Groq has restricted this model for the configured account or project. Select another available model."
+          : "This model is no longer available on Groq. Select another available model.";
+        blocked.set(modelId, { until: Date.now() + 60000, reason: message });
+        throw new AppError(409, permission ? "MODEL_PERMISSION" : "MODEL_UNAVAILABLE", message);
+      }
+      if (response.status === 429)
+        throw new AppError(
+          429,
+          "MODEL_RATE_LIMIT",
+          "Groq's free allowance is busy or exhausted. Wait before sending another question.",
+          Number(response.headers.get("Retry-After")) || 60,
+        );
       if (!response.ok || !response.body)
         throw new AppError(
           503,
@@ -114,6 +200,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           "The answer provider is temporarily unavailable. Your sources are still available.",
         );
       let finished = false;
+      let actual: ModelAttribution | null = null;
       for await (const data of readSse(response.body)) {
         if (data === "[DONE]") {
           if (!finished)
@@ -122,10 +209,13 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
               "INCOMPLETE_STREAM",
               "The answer was interrupted. Your sources are still available.",
             );
-          return;
+          if (!actual)
+            throw new AppError(502, "MODEL_UNCONFIRMED", "The provider did not confirm the answer's model. This answer is incomplete.");
+          return actual;
         }
         const packet = z
           .object({
+            model: z.string().optional(),
             choices: z.array(
               z.object({
                 delta: z.object({ content: z.string().nullable().optional() }),
@@ -140,6 +230,11 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
             "INVALID_STREAM",
             "The answer provider sent an invalid response.",
           );
+        if (packet.data.model) {
+          if (packet.data.model !== modelId)
+            throw new AppError(502, "MODEL_MISMATCH", "The provider returned a different model. No completed answer was recorded. Try again later.");
+          actual = { ...approved, provider: "Groq" };
+        }
         const choice = packet.data.choices[0];
         if (choice?.delta.content) yield choice.delta.content;
         if (choice?.finish_reason) {

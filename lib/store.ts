@@ -10,7 +10,7 @@ export function createStore(config: Config, http: SupabaseFetch = fetch): Store 
     `id=eq.${encodeURIComponent(id)}&user_id=eq.${encodeURIComponent(userId)}`;
   async function conversation(userId: string, id: string) {
     const rows = await request<Conversation[]>(
-      `nuelexity_conversations?${owned(userId, id)}&select=id,title,created_at,updated_at`,
+      `nuelexity_conversations?${owned(userId, id)}&select=id,title,created_at,updated_at,selected_model`,
     );
     if (!rows[0]) throw new AppError(404, "NOT_FOUND", "Conversation not found.");
     return rows[0];
@@ -47,32 +47,57 @@ export function createStore(config: Config, http: SupabaseFetch = fetch): Store 
     },
     list: (userId, offset) =>
       request(
-        `nuelexity_conversations?user_id=eq.${encodeURIComponent(userId)}&select=id,title,created_at,updated_at&order=updated_at.desc,id.desc&limit=30&offset=${offset}`,
+        `nuelexity_conversations?user_id=eq.${encodeURIComponent(userId)}&select=id,title,created_at,updated_at,selected_model&order=updated_at.desc,id.desc&limit=30&offset=${offset}`,
       ),
     async detail(userId, id) {
       const row = await conversation(userId, id);
-      const messages = await request<(Omit<Message, "followUps"> & { follow_ups: string[] })[]>(
-        `nuelexity_messages?conversation_id=eq.${encodeURIComponent(id)}&user_id=eq.${encodeURIComponent(userId)}&select=id,role,content,sources,follow_ups,status,created_at&order=sequence.asc&limit=60`,
+      const messages = await request<
+        (Omit<Message, "followUps" | "answerKind"> & {
+          follow_ups: string[];
+          answer_kind: Message["answerKind"];
+        })[]
+      >(
+        `nuelexity_messages?conversation_id=eq.${encodeURIComponent(id)}&user_id=eq.${encodeURIComponent(userId)}&select=id,role,content,sources,follow_ups,status,created_at,model,answer_kind&order=sequence.asc&limit=60`,
       );
       return {
         conversation: row,
-        messages: messages.map(({ follow_ups, ...m }) => ({ ...m, followUps: follow_ups })),
+        messages: messages.map(({ follow_ups, answer_kind, ...m }) => ({
+          ...m,
+          model: m.model ?? null,
+          answerKind: answer_kind ?? null,
+          followUps: follow_ups,
+        })),
       };
     },
     async remove(userId, id) {
       await conversation(userId, id);
       await request(`nuelexity_conversations?${owned(userId, id)}`, { method: "DELETE" });
     },
-    async create(userId, query) {
+    async create(userId, query, modelId) {
       const rows = await request<Conversation[]>(
-        "nuelexity_conversations?select=id,title,created_at,updated_at",
+        "nuelexity_conversations?select=id,title,created_at,updated_at,selected_model",
         {
           method: "POST",
           headers: { Prefer: "return=representation" },
-          body: JSON.stringify({ user_id: userId, title: query.slice(0, 100) }),
+          body: JSON.stringify({
+            user_id: userId,
+            title: query.slice(0, 100),
+            selected_model: modelId ?? config.groqModel,
+          }),
         },
       );
       return rows[0]!;
+    },
+    async setModel(userId, id, modelId) {
+      await conversation(userId, id);
+      await request(`nuelexity_conversations?${owned(userId, id)}&select=id`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ selected_model: modelId, updated_at: new Date().toISOString() }),
+      }).then((rows) => {
+        if (!Array.isArray(rows) || !rows.length)
+          throw new AppError(404, "NOT_FOUND", "Conversation not found.");
+      });
     },
     async save(userId, id, message) {
       await conversation(userId, id);
@@ -86,6 +111,8 @@ export function createStore(config: Config, http: SupabaseFetch = fetch): Store 
           sources: message.sources,
           follow_ups: message.followUps,
           status: message.status,
+          model: message.model ?? null,
+          answer_kind: message.answerKind ?? null,
         }),
       });
     },
@@ -110,6 +137,8 @@ export function createStore(config: Config, http: SupabaseFetch = fetch): Store 
       }),
     async ready() {
       await request("nuelexity_usage?select=subject&limit=0");
+      await request("nuelexity_conversations?select=selected_model&limit=0");
+      await request("nuelexity_messages?select=model,answer_kind&limit=0");
     },
   };
 }

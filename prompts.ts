@@ -20,6 +20,28 @@ export function buildPrompt(query: string, sources: Source[], history: Message[]
   });
 }
 
+export function boundedPrompt(query: string, sources: Source[], history: Message[], maxBytes: number) {
+  const evidence = sources.map((source) => ({ ...source }));
+  let context = history.filter((message) => message.status === "complete").slice(-6);
+  const fits = (prompt: string) =>
+    new TextEncoder().encode(SYSTEM_PROMPT + prompt).length + 128 <= maxBytes;
+  let prompt = buildPrompt(query, evidence, context);
+  // Retrieved excerpts and history are already clipped. Trim them further for
+  // the Free TPM budget; preserve the question and evidence from every source.
+  while (!fits(prompt) && context.length) {
+    context = context.slice(1);
+    prompt = buildPrompt(query, evidence, context);
+  }
+  while (!fits(prompt)) {
+    const largest = [...evidence].sort((a, b) => b.snippet.length - a.snippet.length)[0];
+    if (!largest || largest.snippet.length <= 32)
+      throw new Error("INPUT_LIMIT");
+    largest.snippet = largest.snippet.slice(0, Math.floor(largest.snippet.length / 2));
+    prompt = buildPrompt(query, evidence, context);
+  }
+  return prompt;
+}
+
 export function followUps(query: string) {
   // Useful directions without having to pay for a second model call.
   const topic = query.slice(0, 140);

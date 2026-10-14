@@ -6,6 +6,8 @@ import { AppError } from "../lib/errors";
 import { createHmac } from "node:crypto";
 import { issueGuestSession } from "../lib/guest-session";
 import type { Conversation, Message, Providers, Store } from "../lib/types";
+import { APPROVED_MODELS, modelCatalogue } from "../lib/models";
+import { createProviders } from "../lib/providers";
 
 const owner = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
@@ -56,9 +58,10 @@ async function fixture(
     list: async () => [conversation],
     detail: async (userId) => {
       if (userId !== owner) throw new AppError(404, "NOT_FOUND", "Conversation not found.");
-      return { conversation, messages: [] };
+      return { conversation, messages: calls.saved.map((message, index) => ({ ...message, id: `message-${index}`, created_at: "now" }) as Message) };
     },
-    create: async () => conversation,
+    create: async (_userId, _query, modelId) => { conversation.selected_model = modelId; return conversation; },
+    setModel: async (_userId, _id, modelId) => { conversation.selected_model = modelId; },
     remove: async () => {},
     ready: async () => {},
     save: async (_userId, _id, message) => {
@@ -75,16 +78,18 @@ async function fixture(
     ...overrides.store,
   };
   const providers: Providers = {
+    models: async () => modelCatalogue({ ...config, aiProvider: "groq" }, new Set(APPROVED_MODELS.map((model) => model.id))),
     search: async () => {
       calls.searches++;
       return [
         { id: 1, title: "Evidence", url: "https://example.org/", snippet: "Grounded evidence." },
       ];
     },
-    answer: async function* () {
+    answer: async function* (_query, _sources, _history, _signal, modelId) {
       calls.answers++;
       yield "First 😹";
       yield " and second [1].";
+      return config.aiProvider === "groq" ? { ...APPROVED_MODELS.find((model) => model.id === modelId)!, provider: "Groq" as const } : null;
     },
     verifyGuest: async () => {
       calls.guestChecks++;
@@ -374,6 +379,7 @@ describe("HTTP search contract", () => {
               { once: true },
             ),
           );
+          return null;
         },
       },
     });
@@ -449,5 +455,125 @@ describe("HTTP search contract", () => {
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:3000");
     expect(calls.searches).toBe(0);
+  });
+});
+
+describe("model selection", () => {
+  const model20 = "openai/gpt-oss-20b", model120 = "openai/gpt-oss-120b", qwen = "qwen/qwen3.8-27b";
+  const ai = { aiProvider: "groq" as const };
+  async function choose(base: string, modelId: string, token = "good") {
+    return fetch(`${base}/conversations/${id}/model`, {
+      method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ modelId }),
+    });
+  }
+  test("catalogue shares approved labels, Preview and configured default; access comes from verified auth", async () => {
+    const { base, config } = await fixture({ config: ai });
+    const guest = await (await fetch(`${base}/models`)).json() as any;
+    expect(guest.canSelect).toBe(false);
+    expect(guest.defaultModelId).toBe(config.groqModel);
+    expect(guest.models.map((model: any) => model.id)).toEqual([model20, model120, qwen]);
+    expect(guest.models[2]).toMatchObject({ name: "Qwen 3.8 27B", preview: true, provider: "Groq" });
+    const member = await (await fetch(`${base}/models`, { headers: { Authorization: "Bearer good" } })).json() as any;
+    expect(member.canSelect).toBe(true);
+    expect((await fetch(`${base}/models`, { headers: { Authorization: "Bearer forged" } })).status).toBe(401);
+  });
+  test("authenticated selections reach the actual provider adapter with the correct ID without changing config", async () => {
+    const sent: string[] = [];
+    const adapter = createProviders(readConfig({ AI_PROVIDER: "groq" }), async (url, options) => {
+      expect(url).toBe("https://api.groq.com/openai/v1/chat/completions");
+      const body = JSON.parse(options.body as string);
+      sent.push(body.model);
+      return new Response(`data: ${JSON.stringify({ model: body.model, choices: [{ delta: { content: "Evidence [1]" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+    });
+    const { ask, calls, config } = await fixture({ config: ai, providers: { answer: adapter.answer } });
+    for (const modelId of [model120, qwen, model20]) {
+      const response = await ask({ query: "question", modelId }, "good");
+      expect(await response.text()).toContain('event: done');
+    }
+    expect(sent).toEqual([model120, qwen, model20]);
+    expect(config.groqModel).toBe(model20);
+    expect(calls.saved.filter((message) => message.role === "assistant").map((message) => message.model?.id)).toEqual(sent);
+  });
+  test("saved selection survives reopening and subsequent switches preserve older answer labels", async () => {
+    const { base, ask, calls } = await fixture({ config: ai });
+    await (await ask({ query: "first", modelId: model120 }, "good")).text();
+    let detail = await (await fetch(`${base}/conversations/${id}`, { headers: { Authorization: "Bearer good" } })).json() as any;
+    expect(detail.conversation.selected_model).toBe(model120);
+    expect((await choose(base, qwen)).status).toBe(200);
+    await (await ask({ query: "second", conversationId: id }, "good")).text();
+    detail = await (await fetch(`${base}/conversations/${id}`, { headers: { Authorization: "Bearer good" } })).json() as any;
+    expect(detail.conversation.selected_model).toBe(qwen);
+    expect(detail.messages.filter((message: Message) => message.role === "assistant").map((message: Message) => message.model?.id)).toEqual([model120, qwen]);
+    expect(calls.reserves).toBe(2);
+  });
+  test("an in-flight model stays frozen while a different choice is saved for the next request", async () => {
+    let proceed!: () => void, started!: () => void;
+    const wait = new Promise<void>((resolve) => { proceed = resolve; });
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const { base, ask, calls } = await fixture({ config: ai, providers: {
+      answer: async function* (_q, _s, _h, _signal, modelId) {
+        started(); await wait;
+        yield "answer";
+        return { ...APPROVED_MODELS.find((model) => model.id === modelId)!, provider: "Groq" };
+      },
+    }});
+    const response = await ask({ query: "question", modelId: model20 }, "good");
+    await ready;
+    expect((await choose(base, qwen)).status).toBe(200);
+    proceed();
+    const text = await response.text();
+    expect(text).toContain(`"requestedModelId":"${model20}"`);
+    expect(calls.saved[1]?.model?.id).toBe(model20);
+    const detail = await (await fetch(`${base}/conversations/${id}`, { headers: { Authorization: "Bearer good" } })).json() as any;
+    expect(detail.conversation.selected_model).toBe(qwen);
+  });
+  test("guest overrides, unknown IDs and forged auth never reach quota, bot, search or answer calls", async () => {
+    const { ask, calls } = await fixture({ config: ai });
+    for (const [modelId, token, status] of [[model120, undefined, 403], ["not-approved", "good", 400], [model120, "forged", 401]] as const)
+      expect((await ask({ query: "question", modelId }, token)).status).toBe(status);
+    expect(calls.reserves).toBe(0); expect(calls.guestChecks).toBe(0);
+    expect(calls.searches).toBe(0); expect(calls.answers).toBe(0);
+    const guest = await ask({ query: "question", modelId: model20 });
+    expect(await guest.text()).toContain(`"id":"${model20}"`);
+  });
+  test("quota allowance belongs to the account, spanning model switches", async () => {
+    let reservations = 0;
+    const identities: string[] = [];
+    const { ask, calls } = await fixture({ config: ai, store: { reserve: async (identity) => {
+      identities.push(identity.subject);
+      return ++reservations <= 1 ? { allowed: true } : { allowed: false, code: "DAILY_LIMIT", retryAfter: 60 };
+    }}});
+    await (await ask({ query: "first", modelId: model20 }, "good")).text();
+    expect((await ask({ query: "second", modelId: qwen }, "good")).status).toBe(429);
+    expect(identities).toEqual([`user:${owner}`, `user:${owner}`]);
+    expect(calls.answers).toBe(1);
+  });
+  test("retired stored selections and unavailable models block before generation without defaulting", async () => {
+    const { base, ask, calls } = await fixture({ config: ai, store: {
+      detail: async () => ({ conversation: { id, title: "Old", created_at: "now", updated_at: "now", selected_model: "retired/model" }, messages: [] }),
+    }});
+    expect((await ask({ query: "question", conversationId: id }, "good")).status).toBe(400);
+    expect(calls.searches).toBe(0); expect(calls.answers).toBe(0); expect(calls.reserves).toBe(0);
+    expect((await choose(base, model20)).status).toBe(200);
+    const unavailable = await fixture({ config: ai, providers: { models: async () => modelCatalogue(readConfig({ AI_PROVIDER: "groq" }), new Set([model20])) } });
+    expect((await unavailable.ask({ query: "question", modelId: qwen }, "good")).status).toBe(409);
+    expect(unavailable.calls.searches).toBe(0); expect(unavailable.calls.answers).toBe(0);
+  });
+  test("only owners may persist choices and changing a choice reserves no search allowance", async () => {
+    const { base, calls } = await fixture({ config: ai });
+    expect((await choose(base, qwen, "other")).status).toBe(404);
+    expect((await choose(base, "not-approved")).status).toBe(400);
+    expect((await choose(base, model120)).status).toBe(200);
+    expect(calls.reserves).toBe(0); expect(calls.answers).toBe(0);
+  });
+  test("provider permission failures retain reservations and partial text without model attribution or fallback", async () => {
+    const { ask, calls } = await fixture({ config: ai, providers: { answer: async function* () {
+      yield "Partial"; throw new AppError(409, "MODEL_PERMISSION", "Choose another model.");
+    }}});
+    const text = await (await ask({ query: "question", modelId: qwen }, "good")).text();
+    expect(text).toContain("MODEL_PERMISSION"); expect(text).not.toContain("event: done");
+    expect(calls.reserves).toBe(1); expect(calls.saved[1]).toMatchObject({ status: "failed" });
+    expect(calls.saved[1]?.model).toBeUndefined();
   });
 });
