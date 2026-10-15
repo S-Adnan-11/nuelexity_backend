@@ -36,7 +36,7 @@ Signed-in users can select GPT-OSS 20B, GPT-OSS 120B, or Qwen 3.8 27B (Preview) 
 
 ## Current model-selection adoption
 
-All three candidates passed one bounded live generation with the existing key. The new additive [model-selection migration](supabase/migrations/202610140001_model_selection.sql) is the outstanding external requirement; remote zero-row checks confirm its columns are absent. Apply it once, run the [read-only SQL verification](supabase/verification/202610140001_model_selection.sql), then `bun scripts/check-model-schema.ts` and check `/ready`. Existing environment values, the Free account and Turnstile setup stay as configured. See [exact instructions, checks and owner review](docs/MODEL_SELECTION.md). Do not rerun the foundation migrations.
+All three candidates passed the earlier bounded live generation checks with the existing key. On 2026-10-15, `bun scripts/check-model-schema.ts` confirmed HTTP 200 zero-row access to quota storage and the selection/attribution columns. The older missing-column blocker is cleared; do not rerun migrations based on that old note. The [read-only SQL verification](supabase/verification/202610140001_model_selection.sql) can audit constraints/RLS separately; this session did not mutate or inspect conversation rows. Existing environment values, the Free account and Turnstile setup stay as configured. See [adoption status and owner review](docs/MODEL_SELECTION.md).
 
 ## First-time deployment configuration reference
 
