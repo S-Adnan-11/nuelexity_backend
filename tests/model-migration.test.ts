@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 
 const db = new PGlite();
@@ -12,11 +13,11 @@ beforeAll(async () => {
     grant usage on schema public, auth to anon, authenticated, service_role;
     grant execute on function auth.uid() to authenticated;
     insert into auth.users values ('${owner}'), ('${other}');`);
-  await db.exec(await Bun.file(new URL("../supabase/migrations/202610050001_research_foundation.sql", import.meta.url)).text());
+  await db.exec(await readFile(new URL("../supabase/migrations/202610050001_research_foundation.sql", import.meta.url), "utf8"));
   await db.exec(`insert into public.nuelexity_conversations(id,user_id,title) values ('${id}','${owner}','Preserved');
     insert into public.nuelexity_messages(conversation_id,user_id,role,content) values ('${id}','${owner}','assistant','Old answer');`);
-  await db.exec(await Bun.file(new URL("../supabase/migrations/202610140001_model_selection.sql", import.meta.url)).text());
-  await db.exec(await Bun.file(new URL("../supabase/verification/202610140001_model_selection.sql", import.meta.url)).text());
+  await db.exec(await readFile(new URL("../supabase/migrations/202610140001_model_selection.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../supabase/verification/202610140001_model_selection.sql", import.meta.url), "utf8"));
 }, 20000);
 afterAll(async () => { await db.close(); });
 

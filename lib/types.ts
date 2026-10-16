@@ -1,4 +1,4 @@
-import type { ModelAttribution, ModelCatalogue } from "./models";
+import type { ModelAttribution, ModelCatalogue } from "./models.js";
 export interface Source {
   id: number;
   title: string;

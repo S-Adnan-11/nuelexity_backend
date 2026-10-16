@@ -3,17 +3,17 @@ import type { ErrorRequestHandler, Request, Response } from "express";
 import cors from "cors";
 import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { authenticate } from "./middleware";
-import { followUps } from "./prompts";
-import { readConfig } from "./lib/config";
-import type { Config } from "./lib/config";
-import { AppError, publicError } from "./lib/errors";
-import { createProviders } from "./lib/providers";
-import { createStore } from "./lib/store";
-import { issueGuestSession, verifyGuestSession } from "./lib/guest-session";
-import type { Message, Providers, Source, Store } from "./lib/types";
-import { APPROVED_MODELS, selectModel } from "./lib/models";
-import type { ModelAttribution } from "./lib/models";
+import { authenticate } from "./middleware.js";
+import { AnswerSections } from "./lib/follow-ups.js";
+import { readConfig } from "./lib/config.js";
+import type { Config } from "./lib/config.js";
+import { AppError, publicError } from "./lib/errors.js";
+import { createProviders } from "./lib/providers.js";
+import { createStore } from "./lib/store.js";
+import { issueGuestSession, verifyGuestSession } from "./lib/guest-session.js";
+import type { Message, Providers, Source, Store } from "./lib/types.js";
+import { APPROVED_MODELS, selectModel } from "./lib/models.js";
+import type { ModelAttribution } from "./lib/models.js";
 
 const askSchema = z
   .object({
@@ -336,6 +336,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       send("sources", { sources });
       send("status", { stage: "answering" });
       const generation = providers.answer(input.query, sources, history, signal, requestedModel);
+      const sections = new AnswerSections();
       try {
         while (true) {
           const chunk = await generation.next();
@@ -343,7 +344,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
             actualModel = chunk.value;
             break;
           }
-          const text = chunk.value;
+          const text = sections.push(chunk.value);
           if (answer.length + text.length > 12000)
             throw new AppError(
               502,
@@ -351,7 +352,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
               "Pardon we're still underr development and we set some limitations\n This answer is too long. Try a narrower question.",
             );
           answer += text;
-          send("delta", { text });
+          if (text) send("delta", { text });
         }
       } finally {
         await generation.return(null);
@@ -363,8 +364,8 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
           "No answer was returned. Your sources are still available.",
         );
       signal.throwIfAborted();
-      const suggestions = followUps(input.query);
       const answerKind = !sources.length ? "no-sources" : config.aiProvider === "none" ? "sources-only" : "ai";
+      const suggestions = answerKind === "ai" ? sections.suggestions(input.query, answer, sources, history) : [];
       if (answerKind === "ai" && (!actualModel || actualModel.id !== requestedModel))
         throw new AppError(502, "MODEL_UNCONFIRMED", "The answer's model could not be confirmed. Try again later.");
       if (userId && conversationId) {

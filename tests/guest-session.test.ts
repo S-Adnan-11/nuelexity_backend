@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { GUEST_SESSION_MS, issueGuestSession, verifyGuestSession } from "../lib/guest-session";
+import { expect, test } from "vitest";
+import { GUEST_SESSION_MS, issueGuestSession, verifyGuestSession } from "../lib/guest-session.js";
 
 const secret = "test-only-secret".repeat(4),
   ip = "a".repeat(64),

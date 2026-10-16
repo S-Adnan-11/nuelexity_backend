@@ -1,4 +1,4 @@
-import { readConfig } from "../lib/config";
+import { readConfig } from "../lib/config.js";
 
 // Zero-row reads only, with fixed summaries. Never print database responses.
 const config = readConfig();

@@ -1,8 +1,8 @@
-import { expect, test } from "bun:test";
-import { readConfig } from "../lib/config";
-import { createProviders, safeUrl } from "../lib/providers";
-import type { ProviderFetch } from "../lib/providers";
-import { readSse } from "../lib/sse";
+import { expect, test } from "vitest";
+import { readConfig } from "../lib/config.js";
+import { createProviders, safeUrl } from "../lib/providers.js";
+import type { ProviderFetch } from "../lib/providers.js";
+import { readSse } from "../lib/sse.js";
 
 const signal = new AbortController().signal;
 function packets(text: string, size = 1) {
@@ -239,4 +239,21 @@ test("catalogue errors fail closed and a denied candidate is disabled without af
     return new Response(null, { status: 500 });
   }).models()).rejects.toThrow("could not be checked");
   expect(failedChecks).toBe(1);
+});
+
+test("a token cap inside optional suggestions preserves the confirmed answer, while unfinished answers still fail", async () => {
+  for (const footer of [false,true]) {
+    let calls=0;
+    const providers=createProviders(readConfig({AI_PROVIDER:'groq'}),async()=>{
+      calls++;
+      return new Response(packets(
+        'data: '+JSON.stringify({model:'openai/gpt-oss-20b',choices:[{delta:{content:'RSA uses primes [1].'}}]})+'\n\n'+
+        (footer?'data: '+JSON.stringify({choices:[{delta:{content:'<|nuelexity_follow_ups_v1|>{"questions":'}}]})+'\n\n':'')+
+        'data: '+JSON.stringify({choices:[{delta:{},finish_reason:'length'}]})+'\n\ndata: [DONE]\n\n'));
+    });
+    const collect=async()=>{const generation=providers.answer('RSA',[{id:1,title:'RSA',url:'https://example.test',snippet:'Primes'}],[],signal);while(true){const part=await generation.next();if(part.done)return part.value;}};
+    if(footer) expect((await collect())?.id).toBe('openai/gpt-oss-20b');
+    else await expect(collect()).rejects.toThrow('limit');
+    expect(calls).toBe(1);
+  }
 });

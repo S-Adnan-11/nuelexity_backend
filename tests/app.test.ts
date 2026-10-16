@@ -1,13 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import type { Server } from "node:http";
-import { createApp } from "../app";
-import { readConfig } from "../lib/config";
-import { AppError } from "../lib/errors";
+import { createApp } from "../app.js";
+import { readConfig } from "../lib/config.js";
+import { AppError } from "../lib/errors.js";
 import { createHmac } from "node:crypto";
-import { issueGuestSession } from "../lib/guest-session";
-import type { Conversation, Message, Providers, Store } from "../lib/types";
-import { APPROVED_MODELS, modelCatalogue } from "../lib/models";
-import { createProviders } from "../lib/providers";
+import { issueGuestSession } from "../lib/guest-session.js";
+import type { Conversation, Message, Providers, Store } from "../lib/types.js";
+import { APPROVED_MODELS, modelCatalogue } from "../lib/models.js";
+import { createProviders } from "../lib/providers.js";
 
 const owner = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
@@ -575,5 +575,44 @@ describe("model selection", () => {
     expect(text).toContain("MODEL_PERMISSION"); expect(text).not.toContain("event: done");
     expect(calls.reserves).toBe(1); expect(calls.saved[1]).toMatchObject({ status: "failed" });
     expect(calls.saved[1]?.model).toBeUndefined();
+  });
+});
+
+describe("contextual follow-up protocol", () => {
+  const marker = "<|nuelexity_follow_ups_v1|>";
+  const text = "RSA key generation uses prime factors [1].";
+  const question = "Can you walk me through RSA key generation with small numbers?";
+  test("one reserved answer call separates metadata and persists suggestions with the correct completed answer", async () => {
+    let callsToAnswer=0;
+    const {ask,calls,base}=await fixture({config:{aiProvider:'groq'},providers:{answer:async function* () {
+      callsToAnswer++;
+      for(const char of text+'\n'+marker+JSON.stringify({questions:[{question,anchor:'key generation'}]})) yield char;
+      return {...APPROVED_MODELS[0],provider:'Groq' as const};
+    }}});
+    const response=await ask({query:'What is RSA key generation?'},'good');
+    const wire=await response.text();
+    expect(callsToAnswer).toBe(1); expect(calls.reserves).toBe(1);
+    expect(wire).not.toContain('nuelexity_follow_ups'); expect(wire).not.toContain('anchor');
+    expect(wire).toContain(JSON.stringify({questions:[question]}));
+    const saved=calls.saved.find(message=>message.role==='assistant')!;
+    expect(saved.content).toBe(text+'\n'); expect(saved.followUps).toEqual([question]); expect(saved.status).toBe('complete');
+    const detail=await (await fetch(base+'/conversations/'+id,{headers:{Authorization:'Bearer good'}})).json() as {messages:Message[]};
+    expect(detail.messages.at(-1)!.followUps).toEqual([question]);
+    expect(detail.messages.at(-1)!.model!.provider).toBe('Groq');
+  });
+  test("a malformed footer never invalidates a completed answer; interrupted metadata never becomes success", async () => {
+    for(const interrupted of [false,true]) {
+      const {ask,calls}=await fixture({config:{aiProvider:'groq'},providers:{answer:async function* () {
+        yield text+marker+'{"questions":';
+        if(interrupted) throw new AppError(502,'INCOMPLETE_STREAM','Interrupted');
+        return {...APPROVED_MODELS[0],provider:'Groq' as const};
+      }}});
+      const wire=await (await ask({query:'Explain RSA'},'good')).text();
+      expect(wire).not.toContain(marker); expect(wire).not.toContain('"questions":}');
+      const saved=calls.saved.find(message=>message.role==='assistant')!;
+      expect(saved.content).toBe(text); expect(saved.followUps).toEqual([]);
+      expect(saved.status).toBe(interrupted?'failed':'complete');
+      expect(wire.includes('event: done')).toBe(!interrupted);
+    }
   });
 });

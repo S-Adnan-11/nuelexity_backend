@@ -1,7 +1,7 @@
-import { expect, test } from "bun:test";
-import { createSupabaseClient } from "../client";
-import { readConfig } from "../lib/config";
-import { createStore } from "../lib/store";
+import { expect, test } from "vitest";
+import { createSupabaseClient } from "../client.js";
+import { readConfig } from "../lib/config.js";
+import { createStore } from "../lib/store.js";
 
 const owner = "11111111-1111-4111-8111-111111111111",
   id = "33333333-3333-4333-8333-333333333333";

@@ -1,8 +1,8 @@
-import { createSupabaseClient } from "../client";
-import type { SupabaseFetch } from "../client";
-import type { Config } from "./config";
-import { AppError } from "./errors";
-import type { Conversation, Identity, Message, Reservation, Store } from "./types";
+import { createSupabaseClient } from "../client.js";
+import type { SupabaseFetch } from "../client.js";
+import type { Config } from "./config.js";
+import { AppError } from "./errors.js";
+import type { Conversation, Identity, Message, Reservation, Store } from "./types.js";
 
 export function createStore(config: Config, http: SupabaseFetch = fetch): Store {
   const request = createSupabaseClient(config, http);

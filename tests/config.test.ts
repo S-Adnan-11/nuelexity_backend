@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { readConfig } from "../lib/config";
+import { expect, test } from "vitest";
+import { readConfig } from "../lib/config.js";
 
 const settings = {
   SUPABASE_URL: "https://example.supabase.co",

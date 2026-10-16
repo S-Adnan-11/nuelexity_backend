@@ -1,5 +1,6 @@
-import { createApp } from "./app";
-import { readConfig } from "./lib/config";
+import { pathToFileURL } from "node:url";
+import { createApp } from "./app.js";
+import { readConfig } from "./lib/config.js";
 
 export const app = createApp();
 
@@ -28,7 +29,7 @@ app.post("/requestlity_nuelexity", async (req, res) => {
     res.end();
 });
 
-if (import.meta.main) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = readConfig();
   if (!config.configured) {
     console.warn(`Search setup incomplete: ${config.missingSettings.join(", ")}`);

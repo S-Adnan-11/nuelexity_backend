@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 
 const db = new PGlite();
@@ -8,7 +9,7 @@ const legacyThread = "33333333-3333-4333-8333-333333333333";
 let originalRows: Record<string, unknown>[];
 
 async function runSql(path: string) {
-  await db.exec(await Bun.file(new URL(path, import.meta.url)).text());
+  await db.exec(await readFile(new URL(path, import.meta.url), "utf8"));
 }
 
 async function legacyRows() {
@@ -129,9 +130,9 @@ test("legacy hardening also works on a fresh project without old tables", async 
   const fresh = new PGlite();
   try {
     await fresh.exec(
-      await Bun.file(
+      await readFile(
         new URL("../supabase/migrations/202610060001_secure_legacy_tables.sql", import.meta.url),
-      ).text(),
+        "utf8"),
     );
     expect(
       (await fresh.query("select * from information_schema.tables where table_schema = 'public'"))
