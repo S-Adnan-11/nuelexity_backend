@@ -1,5 +1,11 @@
 # Nuelexity review and delivery plan
 
+## Current milestone — 2026-10-16
+
+The existing Node/npm migration and chat refinements were reviewed, verified and committed locally in both repositories. The frontend now supports paginated library browsing and private `/dashboard/<conversation-id>` URLs with direct loading, browser back/forward, scroll restoration, safe sign-in return and navigation cancellation. These use the existing owned conversation API; no migration or provider configuration change is needed. See the [updated frontend handoff](../../../frontend/nuelexity_frontend/docs/HANDOFF.md).
+
+The next work is free hosting/DNS/HTTPS setup, production OAuth/Turnstile origin verification, and physical mobile/screen-reader review. Work is paused after the local delivery at the owner's request. No changes were pushed or deployed, no live provider calls were made, and no remote database changes were performed during this delivery. The foundation review below is historical.
+
 The historical verification below originally used Bun; runnable command examples now use the supported npm workflow. See the backend `NPM_SUPPORT.md` for the Node migration results.
 The 2026-10-14 [model-selection delivery](MODEL_SELECTION.md) adds the owner-approved Groq catalogue, conversation choices, confirmed per-answer attribution and accessible selector. Code and local verification are complete; zero-row checks on 2026-10-15 confirmed access to the model-selection columns in the owner’s project. New projects still require that additive migration. The historical foundation review below describes the earlier baseline.
 
