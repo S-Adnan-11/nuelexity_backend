@@ -1,4 +1,4 @@
-# dependencies (bun install)
+# dependencies
 node_modules
 
 # output
@@ -41,5 +41,15 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.har
 supabase/.temp/
 supabase/.branches/
-docs/
+docs/*
+!docs/API.md
+!docs/SETUP.md
+!docs/DATABASE.md
+!docs/MODEL_SELECTION.md
+!docs/PROJECT_REVIEW.md
+!docs/RENDER_DEPLOYMENT.md
 AGENTS.md
+
+# npm lock is canonical; optional Bun installs must not add a second lock.
+bun.lock
+bun.lockb

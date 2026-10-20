@@ -1,5 +1,5 @@
-import { AppError } from "./lib/errors";
-import type { Config } from "./lib/config";
+import { AppError } from "./lib/errors.js";
+import type { Config } from "./lib/config.js";
 
 // Supabase's Data API avoids the direct Postgres/IPv6 connection wahala sha.
 // Every call is server-side; the secret key never enters the frontend bundle.

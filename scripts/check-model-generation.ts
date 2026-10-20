@@ -1,9 +1,9 @@
 import { createHmac, randomUUID } from "node:crypto";
-import { readConfig } from "../lib/config";
-import { createStore } from "../lib/store";
-import { createProviders } from "../lib/providers";
-import { APPROVED_MODELS } from "../lib/models";
-import { AppError } from "../lib/errors";
+import { readConfig } from "../lib/config.js";
+import { createStore } from "../lib/store.js";
+import { createProviders } from "../lib/providers.js";
+import { APPROVED_MODELS } from "../lib/models.js";
+import { AppError } from "../lib/errors.js";
 
 // Explicit operator diagnostic only. Running this consumes up to three durable
 // reservations and one <=128-output-token Groq request per approved model.

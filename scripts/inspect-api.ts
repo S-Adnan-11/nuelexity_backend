@@ -1,4 +1,4 @@
-import { readConfig } from "../lib/config";
+import { readConfig } from "../lib/config.js";
 
 // Schema metadata only; never fetch conversation/user rows or print credentials.
 const config = readConfig();

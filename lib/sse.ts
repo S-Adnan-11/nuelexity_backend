@@ -1,4 +1,4 @@
-import { AppError } from "./errors";
+import { AppError } from "./errors.js";
 
 // Provider packets can split anywhere, including inside JSON or a UTF-8 character.
 export async function* readSse(body: ReadableStream<Uint8Array>) {

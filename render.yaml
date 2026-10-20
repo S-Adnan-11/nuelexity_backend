@@ -1,0 +1,63 @@
+services:
+  - type: web
+    name: nuelexity-backend
+    runtime: node
+    region: frankfurt
+    plan: free
+    numInstances: 1
+    repo: https://github.com/S-Adnan-11/nuelexity_backend
+    branch: release/render-free
+    autoDeployTrigger: 'off'
+    buildCommand: npm ci --include=dev && npm run build && npm prune --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 15
+    envVars:
+      - key: NODE_VERSION
+        value: 22.23.2
+      - key: NODE_ENV
+        value: production
+      - key: SKIP_INSTALL_DEPS
+        value: 'true'
+      - key: NUELEXITY_ENV_FILE
+        value: none
+      - key: FRONTEND_ORIGINS
+        value: https://nuelexity.devs.surf
+      - key: CLIENT_IP_MODE
+        value: render
+      - key: TRUST_PROXY_HOPS
+        value: '0'
+      - key: MAX_INFLIGHT_REQUESTS
+        value: '8'
+      - key: REQUEST_TIMEOUT_MS
+        value: '60000'
+      - key: GUEST_DAILY_LIMIT
+        value: '2'
+      - key: USER_DAILY_LIMIT
+        value: '5'
+      - key: IP_DAILY_LIMIT
+        value: '10'
+      - key: GLOBAL_DAILY_LIMIT
+        value: '25'
+      - key: GLOBAL_MONTHLY_LIMIT
+        value: '800'
+      - key: GLOBAL_MINUTE_LIMIT
+        value: '4'
+      - key: AI_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: GUEST_ID_SECRET
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false

@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { randomUUID } from "node:crypto";
 
@@ -15,9 +16,9 @@ beforeAll(async () => {
     grant execute on function auth.uid() to authenticated;
     insert into auth.users values ('${owner}'), ('${other}');`);
   await db.exec(
-    await Bun.file(
+    await readFile(
       new URL("../supabase/migrations/202610050001_research_foundation.sql", import.meta.url),
-    ).text(),
+      "utf8"),
   );
 }, 20000);
 beforeEach(async () => {

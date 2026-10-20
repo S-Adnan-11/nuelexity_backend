@@ -1,4 +1,4 @@
-import { readConfig } from "../lib/config";
+import { readConfig } from "../lib/config.js";
 
 // Metadata and zero-row reads only. This never searches, generates, or reserves quota.
 // Print our own summaries; provider responses can contain private account details.

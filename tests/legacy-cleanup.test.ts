@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 
 let db: PGlite;
 const user = "11111111-1111-4111-8111-111111111111";
-const load = (path: string) => Bun.file(new URL(path, import.meta.url)).text();
+const load = (path: string) => readFile(new URL(path, import.meta.url), "utf8");
 const cleanup = () =>
   load("../supabase/maintenance/202610070001_remove_empty_legacy_tables.sql").then((sql) =>
     db.exec(sql),

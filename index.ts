@@ -1,5 +1,6 @@
-import { createApp } from "./app";
-import { readConfig } from "./lib/config";
+import { pathToFileURL } from "node:url";
+import { createApp } from "./app.js";
+import { readConfig } from "./lib/config.js";
 
 export const app = createApp();
 
@@ -28,14 +29,14 @@ app.post("/requestlity_nuelexity", async (req, res) => {
     res.end();
 });
 
-if (import.meta.main) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = readConfig();
   if (!config.configured) {
     console.warn(`Search setup incomplete: ${config.missingSettings.join(", ")}`);
     if (config.missingSettings.includes("GROQ_API_KEY") && process.env.GROK_API_KEY)
       console.warn("Rename GROK_API_KEY to GROQ_API_KEY for the Groq provider.");
   }
-  const server = app.listen(config.port, () => console.log(`Nuelexity backend running on port ${config.port}`));
+  const server = app.listen(config.port, "0.0.0.0", () => console.log(`Nuelexity backend running on port ${config.port}`));
   server.headersTimeout = 10000;
   server.requestTimeout = 15000;
   const stop = () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(1), 10000).unref(); };

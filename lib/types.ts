@@ -1,4 +1,4 @@
-import type { ModelAttribution, ModelCatalogue } from "./models";
+import type { ModelAttribution, ModelCatalogue } from "./models.js";
 export interface Source {
   id: number;
   title: string;
@@ -48,7 +48,7 @@ export interface Store {
   ): Promise<void>;
   reserve(identity: Identity, requestId: string): Promise<Reservation>;
   release(subject: string, requestId: string): Promise<void>;
-  ready(): Promise<void>;
+  ready(signal?: AbortSignal): Promise<void>;
 }
 export interface Providers {
   models(): Promise<ModelCatalogue>;

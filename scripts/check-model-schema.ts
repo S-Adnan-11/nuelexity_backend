@@ -1,4 +1,4 @@
-import { readConfig } from "../lib/config";
+import { readConfig } from "../lib/config.js";
 
 // Zero-row reads only, with fixed summaries. Never print database responses.
 const config = readConfig();
@@ -9,6 +9,7 @@ if (!config.supabaseUrl || !config.secret) {
 let failed = false;
 for (const [table, columns] of [
   ["nuelexity_usage", "subject"],
+  ["nuelexity_leases", "subject"],
   ["nuelexity_conversations", "selected_model"],
   ["nuelexity_messages", "model,answer_kind"],
 ]) {

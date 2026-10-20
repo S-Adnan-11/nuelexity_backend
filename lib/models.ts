@@ -1,5 +1,5 @@
-import type { Config } from "./config";
-import { AppError } from "./errors";
+import type { Config } from "./config.js";
+import { AppError } from "./errors.js";
 
 // This is an owner-approved catalogue, never an import of every Groq model.
 export const APPROVED_MODELS = [

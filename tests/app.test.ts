@@ -1,13 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "vitest";
 import type { Server } from "node:http";
-import { createApp } from "../app";
-import { readConfig } from "../lib/config";
-import { AppError } from "../lib/errors";
+import { createApp } from "../app.js";
+import { readConfig } from "../lib/config.js";
+import { AppError } from "../lib/errors.js";
 import { createHmac } from "node:crypto";
-import { issueGuestSession } from "../lib/guest-session";
-import type { Conversation, Message, Providers, Store } from "../lib/types";
-import { APPROVED_MODELS, modelCatalogue } from "../lib/models";
-import { createProviders } from "../lib/providers";
+import { issueGuestSession } from "../lib/guest-session.js";
+import type { Conversation, Message, Providers, Store } from "../lib/types.js";
+import { APPROVED_MODELS, modelCatalogue } from "../lib/models.js";
+import { createProviders } from "../lib/providers.js";
 
 const owner = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
@@ -576,4 +576,131 @@ describe("model selection", () => {
     expect(calls.reserves).toBe(1); expect(calls.saved[1]).toMatchObject({ status: "failed" });
     expect(calls.saved[1]?.model).toBeUndefined();
   });
+});
+
+describe("contextual follow-up protocol", () => {
+  const marker = "<|nuelexity_follow_ups_v1|>";
+  const text = "RSA key generation uses prime factors [1].";
+  const question = "Can you walk me through RSA key generation with small numbers?";
+  test("one reserved answer call separates metadata and persists suggestions with the correct completed answer", async () => {
+    let callsToAnswer=0;
+    const {ask,calls,base}=await fixture({config:{aiProvider:'groq'},providers:{answer:async function* () {
+      callsToAnswer++;
+      for(const char of text+'\n'+marker+JSON.stringify({questions:[{question,anchor:'key generation'}]})) yield char;
+      return {...APPROVED_MODELS[0],provider:'Groq' as const};
+    }}});
+    const response=await ask({query:'What is RSA key generation?'},'good');
+    const wire=await response.text();
+    expect(callsToAnswer).toBe(1); expect(calls.reserves).toBe(1);
+    expect(wire).not.toContain('nuelexity_follow_ups'); expect(wire).not.toContain('anchor');
+    expect(wire).toContain(JSON.stringify({questions:[question]}));
+    const saved=calls.saved.find(message=>message.role==='assistant')!;
+    expect(saved.content).toBe(text+'\n'); expect(saved.followUps).toEqual([question]); expect(saved.status).toBe('complete');
+    const detail=await (await fetch(base+'/conversations/'+id,{headers:{Authorization:'Bearer good'}})).json() as {messages:Message[]};
+    expect(detail.messages.at(-1)!.followUps).toEqual([question]);
+    expect(detail.messages.at(-1)!.model!.provider).toBe('Groq');
+  });
+  test("a malformed footer never invalidates a completed answer; interrupted metadata never becomes success", async () => {
+    for(const interrupted of [false,true]) {
+      const {ask,calls}=await fixture({config:{aiProvider:'groq'},providers:{answer:async function* () {
+        yield text+marker+'{"questions":';
+        if(interrupted) throw new AppError(502,'INCOMPLETE_STREAM','Interrupted');
+        return {...APPROVED_MODELS[0],provider:'Groq' as const};
+      }}});
+      const wire=await (await ask({query:'Explain RSA'},'good')).text();
+      expect(wire).not.toContain(marker); expect(wire).not.toContain('"questions":}');
+      const saved=calls.saved.find(message=>message.role==='assistant')!;
+      expect(saved.content).toBe(text); expect(saved.followUps).toEqual([]);
+      expect(saved.status).toBe(interrupted?'failed':'complete');
+      expect(wire.includes('event: done')).toBe(!interrupted);
+    }
+  });
+});
+
+describe('predeployment security and local capacity', () => {
+  test('production dummy endpoint is unreachable and private responses cannot be cached', async () => {
+    const { base, ask } = await fixture({ config: { production: true } });
+    const dummy = await fetch(base + '/requestlity_nuelexity', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"dummy":"hello"}' });
+    expect(dummy.status).toBe(404);
+    expect(await dummy.text()).not.toContain('hello');
+    const response = await ask({ query: 'question' }, 'good');
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(response.headers.get('x-robots-tag')).toContain('noindex');
+    await response.text();
+  });
+  test('verification is throttled before extra provider calls', async () => {
+    const { base, calls } = await fixture({ turnstile: true });
+    for (let i = 0; i < 6; i++) {
+      expect((await fetch(base + '/guest/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"turnstileToken":"fake-token"}' })).status).toBe(200);
+    }
+    const denied = await fetch(base + '/guest/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"turnstileToken":"fake-token"}' });
+    expect(denied.status).toBe(429); expect(calls.guestChecks).toBe(6); expect(calls.reserves).toBe(0);
+  });
+  test('controlled mock burst bounds work, sheds overload, then recovers', async () => {
+    let active = 0, peak = 0;
+    const releases: (() => void)[] = [];
+    const { base } = await fixture({ config: { maxInflight: 3 }, providers: { models: async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise<void>(resolve => releases.push(resolve)); active--;
+      return modelCatalogue(readConfig({}), new Set());
+    } } });
+    let overloaded = 0;
+    const requests = Array.from({ length: 12 }, () => fetch(base + '/models').then(response => { if (response.status === 503) overloaded++; return response; }));
+    for (let i = 0; i < 200 && overloaded < 9; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(releases).toHaveLength(3);
+    releases.splice(0).forEach(release => release());
+    const responses = await Promise.all(requests);
+    expect(peak).toBe(3);
+    expect(responses.filter(res => res.status === 200)).toHaveLength(3);
+    expect(responses.filter(res => res.status === 503)).toHaveLength(9);
+    expect(responses.find(res => res.status === 503)?.headers.get('retry-after')).toBe('5');
+    const health = await fetch(base + '/health'); expect(health.status).toBe(200);
+  });
+  test('spoofed forwarding headers do not change direct-client quota identity', async () => {
+    const { base, calls } = await fixture();
+    for (const ip of ['192.0.2.1', '192.0.2.2']) await (await fetch(base + '/nuelexity_ask', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: '{"query":"question"}' })).text();
+    expect(new Set(calls.identities).size).toBe(1);
+  });
+});
+
+
+test('disconnect during auth cannot start retrieval or reserve credits after auth returns', async () => {
+  let finishAuth!: () => void;
+  let started = false;
+  const { base, calls } = await fixture({ store: { verifyToken: async () => {
+    started = true; await new Promise<void>(resolve => { finishAuth = resolve; }); return owner;
+  } } });
+  const controller = new AbortController();
+  const request = fetch(base + '/nuelexity_ask', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer good' }, body: '{"query":"question"}', signal: controller.signal }).catch(() => null);
+  for (let i = 0; i < 100 && !started; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(started).toBe(true);
+  controller.abort(); await request; await new Promise(resolve => setTimeout(resolve, 20));
+  finishAuth(); await new Promise(resolve => setTimeout(resolve, 30));
+  expect(calls.reserves).toBe(0); expect(calls.searches).toBe(0); expect(calls.answers).toBe(0);
+});
+
+test('health performs no dependency work; failed readiness prevents quota, writes and providers', async () => {
+  let checks = 0;
+  const { base, ask, calls } = await fixture({ store: { ready: async () => { checks++; throw new Error('private-storage-detail'); } } });
+  expect(await (await fetch(base + '/health')).json()).toEqual({ status: 'ok' });
+  expect(checks).toBe(0);
+  const responses = await Promise.all(Array.from({ length: 5 }, () => fetch(base + '/ready')));
+  expect(responses.every(response => response.status === 503)).toBe(true);
+  expect(checks).toBe(1);
+  expect(await responses[0]!.text()).not.toContain('private-storage-detail');
+  expect((await ask({ query: 'offline fixture' }, 'good')).status).toBe(503);
+  expect(calls.reserves).toBe(0); expect(calls.saved).toHaveLength(0);
+  expect(calls.searches).toBe(0); expect(calls.answers).toBe(0);
+});
+
+test('Render IP-bound pass survives app restart and ignores spoofed unrelated forwarding headers', async () => {
+  const config = { ...readConfig({ RENDER: 'true', CLIENT_IP_MODE: 'render' }), configured: true, guestSecret: 'test-secret'.repeat(4), turnstileSecret: 'test-secret' };
+  const first = await fixture({ turnstile: true, config });
+  const response = await fetch(first.base + '/guest/session', { method: 'POST', headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.1' }, body: '{"turnstileToken":"offline-fixture"}' });
+  const session = await response.json() as { pass: string };
+  const restarted = await fixture({ turnstile: true, config });
+  const check = (ip: string) => fetch(restarted.base + '/guest/session', { headers: { 'X-Guest-Pass': session.pass, 'CF-Connecting-IP': ip, 'X-Forwarded-For': '198.51.100.2', 'True-Client-IP': '192.0.2.2' } }).then(res => res.json()) as Promise<{ verified: boolean }>;
+  expect((await check('203.0.113.1')).verified).toBe(true);
+  expect((await check('203.0.113.2')).verified).toBe(false);
+  expect((await fetch(restarted.base + '/guest/session')).status).toBe(503);
 });

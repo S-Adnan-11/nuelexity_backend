@@ -1,6 +1,6 @@
 import type { Request } from "express";
-import { AppError } from "./lib/errors";
-import type { Store } from "./lib/types";
+import { AppError } from "./lib/errors.js";
+import type { Store } from "./lib/types.js";
 
 export async function authenticate(
   req: Request,

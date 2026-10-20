@@ -1,11 +1,13 @@
+import { boundedJson } from "./bounded-json.js";
 import { z } from "zod";
-import { boundedPrompt, SYSTEM_PROMPT } from "../prompts";
-import type { Config } from "./config";
-import { AppError } from "./errors";
-import { readSse } from "./sse";
-import type { Providers, Source } from "./types";
-import { APPROVED_MODELS, modelCatalogue } from "./models";
-import type { ModelAttribution, ModelCatalogue } from "./models";
+import { boundedPrompt, SYSTEM_PROMPT } from "../prompts.js";
+import type { Config } from "./config.js";
+import { AppError } from "./errors.js";
+import { readSse } from "./sse.js";
+import type { Providers, Source } from "./types.js";
+import { APPROVED_MODELS, modelCatalogue } from "./models.js";
+import type { ModelAttribution, ModelCatalogue } from "./models.js";
+import { AnswerSections } from "./follow-ups.js";
 
 export function safeUrl(value: string): string | null {
   try {
@@ -50,7 +52,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           );
         const parsed = z.object({
           data: z.array(z.object({ id: z.string(), active: z.boolean().optional() })),
-        }).safeParse(await response.json());
+        }).safeParse(await boundedJson(response, 131072));
         if (!parsed.success)
           throw new AppError(
             503,
@@ -106,7 +108,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           "SEARCH_UNAVAILABLE",
           "Web search is temporarily unavailable. Please try again later.",
         );
-      const parsed = resultsSchema.safeParse(await response.json());
+      const parsed = resultsSchema.safeParse(await boundedJson(response, 262144));
       if (!parsed.success)
         throw new AppError(502, "INVALID_SEARCH", "Web search returned an invalid response.");
       const seen = new Set<string>();
@@ -201,6 +203,8 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
         );
       let finished = false;
       let actual: ModelAttribution | null = null;
+      const sections = new AnswerSections();
+      let hasAnswer = false;
       for await (const data of readSse(response.body)) {
         if (data === "[DONE]") {
           if (!finished)
@@ -236,9 +240,15 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           actual = { ...approved, provider: "Groq" };
         }
         const choice = packet.data.choices[0];
-        if (choice?.delta.content) yield choice.delta.content;
+        if (choice?.delta.content) {
+          const visible = sections.push(choice.delta.content);
+          hasAnswer = hasAnswer || !!visible.trim();
+          yield choice.delta.content;
+        }
         if (choice?.finish_reason) {
-          if (choice.finish_reason !== "stop")
+          // A token cap in the optional footer cannot undo an already completed
+          // answer. The exact boundary, confirmed model and [DONE] remain required.
+          if (choice.finish_reason !== "stop" && !(choice.finish_reason === "length" && hasAnswer && sections.hasAnswerBoundary))
             throw new AppError(
               502,
               "INCOMPLETE_ANSWER",
@@ -277,7 +287,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           "BOT_CHECK_UNAVAILABLE",
           "Verification is temporarily unavailable.",
         );
-      const result = (await response.json()) as {
+      const result = (await boundedJson(response, 16384)) as {
         success?: boolean;
         hostname?: string;
         action?: string;
