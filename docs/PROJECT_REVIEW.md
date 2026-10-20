@@ -1,5 +1,13 @@
 # Nuelexity review and delivery plan
 
+## Backend Render preparation — 2026-10-20
+
+The current hosting decision is Render Free (generated HTTPS hostname), one instance, public learning beta. [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) records the request trace and refined cold-start plan written before implementation, exact settings, proxy boundary, fresh checks, rollback and outstanding external acceptance. Backend health is now process-only; readiness is bounded/deduplicated/cached, and search remains fail-closed on durable quota storage. Frontend warm-up/submission coordination is local for a later deployment. The preserved dummy block is unchanged; startup outside it now explicitly binds `0.0.0.0`. Existing security/reliability work is included as a launch prerequisite. No migration, signing-secret rotation or live provider call is part of this milestone. Older claims below are historical.
+
+## Predeployment milestone — 2026-10-19
+
+Account/About/legal/footer and production SEO preparation are implemented locally in the frontend. Backend fixes add bounded concurrent work, tighter guest-exchange throttling, streaming backpressure, provider JSON caps, private no-store SSE and a production gate around the unchanged dummy handler. Fresh local checks are recorded in frontend [MILESTONE_VERIFICATION.md](../../../frontend/nuelexity_frontend/docs/MILESTONE_VERIFICATION.md). See [DATA_INVENTORY.md](DATA_INVENTORY.md), [THREAT_MODEL.md](THREAT_MODEL.md) and frontend [PREDEPLOYMENT.md](../../../frontend/nuelexity_frontend/docs/PREDEPLOYMENT.md) for policy/launch blockers and exact owner actions. This work does not reapply SQL or change provider settings. Public policy/operator decisions and real HTTPS OAuth/Turnstile/hosting acceptance remain pending. No push or deployment occurred. Reports below are historical, not fresh verification.
+
 ## Current milestone — 2026-10-16
 
 The existing Node/npm migration and chat refinements were reviewed, verified and committed locally in both repositories. The frontend now supports paginated library browsing and private `/dashboard/<conversation-id>` URLs with direct loading, browser back/forward, scroll restoration, safe sign-in return and navigation cancellation. These use the existing owned conversation API; no migration or provider configuration change is needed. See the [updated frontend handoff](../../../frontend/nuelexity_frontend/docs/HANDOFF.md).

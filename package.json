@@ -21,7 +21,8 @@
     "schema:check": "node --import ./scripts/env.mjs --import tsx scripts/check-model-schema.ts",
     "models:check": "node --import ./scripts/env.mjs --import tsx scripts/check-model-generation.ts",
     "test:startup": "node scripts/check-startup.mjs",
-    "test:browser": "node scripts/check-browser.mjs"
+    "test:browser": "node scripts/check-browser.mjs",
+    "smoke:deployed": "node scripts/check-deployment.mjs"
   },
   "dependencies": {
     "cors": "2.8.6",

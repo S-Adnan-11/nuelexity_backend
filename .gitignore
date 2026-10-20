@@ -47,6 +47,7 @@ docs/*
 !docs/DATABASE.md
 !docs/MODEL_SELECTION.md
 !docs/PROJECT_REVIEW.md
+!docs/RENDER_DEPLOYMENT.md
 AGENTS.md
 
 # npm lock is canonical; optional Bun installs must not add a second lock.

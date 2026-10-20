@@ -36,7 +36,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (config.missingSettings.includes("GROQ_API_KEY") && process.env.GROK_API_KEY)
       console.warn("Rename GROK_API_KEY to GROQ_API_KEY for the Groq provider.");
   }
-  const server = app.listen(config.port, () => console.log(`Nuelexity backend running on port ${config.port}`));
+  const server = app.listen(config.port, "0.0.0.0", () => console.log(`Nuelexity backend running on port ${config.port}`));
   server.headersTimeout = 10000;
   server.requestTimeout = 15000;
   const stop = () => { server.close(() => process.exit(0)); setTimeout(() => process.exit(1), 10000).unref(); };

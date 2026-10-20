@@ -23,6 +23,7 @@ try {
   }
   assert.ok(ready, "compiled Node backend startup");
   assert.equal((await fetch(base + "/health")).status, 200);
+  assert.deepEqual(await (await fetch(base + "/health")).json(), { status: "ok" });
   assert.equal((await fetch(base + "/ready")).status, 503);
   const cors = await fetch(base + "/nuelexity_ask", { method: "OPTIONS", headers: {
     Origin: "http://localhost:3000", "Access-Control-Request-Method": "POST",
@@ -32,9 +33,10 @@ try {
   assert.equal(cors.headers.get("access-control-allow-origin"), "http://localhost:3000");
   const dummy = await fetch(base + "/requestlity_nuelexity", { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dummy: "offline-smoke" }) });
-  assert.match(dummy.headers.get("content-type"), /text\/event-stream/);
-  assert.match(await dummy.text(), /data: offline-smoke\n\n/);
-  console.log("PASS compiled Node backend: health, fail-closed readiness, CORS, preserved dummy SSE.");
+  assert.equal(dummy.status, 404);
+  assert.equal((await fetch(base + '/REQUESTLITY_NUELEXITY/', { method: 'POST' })).status, 404);
+  assert.equal((await dummy.json()).error.code, "NOT_FOUND");
+  console.log("PASS compiled Node backend: health, fail-closed readiness, CORS, production dummy blocked (handler preserved).");
 } finally {
   child.kill();
   const [code, signal] = await exited;

@@ -1,5 +1,13 @@
 # Owner setup checklist
 
+## Render backend milestone — 2026-10-20
+
+Owner selected Render Free, its generated HTTPS hostname, one instance and a public learning beta. Follow [the backend-only release runbook](RENDER_DEPLOYMENT.md) before older hosting guidance below. Existing stable signing/provider/Supabase settings and all applied SQL are preserved. `/health` now returns only process status; `/ready` deduplicates bounded zero-row storage checks. No Render account is connected in this session yet; do not infer a live URL. Intended frontend: `https://nuelexity.devs.surf`. Confirmed developer: Adnan Muhammad Sadiq, GitHub `S-Adnan-11`, portfolio `https://s-adnan.dev`; support/privacy `s.adnan.werk@gmail.com`. Remaining policy and real-host acceptance are explicit in the runbook.
+
+## Predeployment follow-on — 2026-10-19
+
+No migration is required for the account/About/legal/SEO milestone. Do not repeat the three migrations already confirmed applied. Keep Node/npm and optional Bun setup below. `MAX_INFLIGHT_REQUESTS` defaults to 8 per process; it complements shared SQL quotas and is not a distributed verification limiter. Production blocks the preserved dummy endpoint. Frontend production startup is held until operator/contact and final legal decisions are complete; review via `npm run preview:local`. See [data inventory/policy decisions](DATA_INVENTORY.md), [threat model](THREAT_MODEL.md) and [exact external dashboard/acceptance actions](../../../frontend/nuelexity_frontend/docs/PREDEPLOYMENT.md). Nothing external was changed. Older verification dates below are historical.
+
 All code changes are local. No provider plan was upgraded and no existing conversation data or schema was mutated during verification. The original foundation checks spent no provider credits; the model-selection checks on 2026-10-14 made exactly three bounded Groq generations and retained their three durable quota reservations.
 
 ## Current model-selection adoption

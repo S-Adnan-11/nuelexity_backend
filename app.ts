@@ -3,6 +3,7 @@ import type { ErrorRequestHandler, Request, Response } from "express";
 import cors from "cors";
 import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { writeEvent } from "./lib/backpressure.js";
 import { authenticate } from "./middleware.js";
 import { AnswerSections } from "./lib/follow-ups.js";
 import { readConfig } from "./lib/config.js";
@@ -14,6 +15,8 @@ import { issueGuestSession, verifyGuestSession } from "./lib/guest-session.js";
 import type { Message, Providers, Source, Store } from "./lib/types.js";
 import { APPROVED_MODELS, selectModel } from "./lib/models.js";
 import type { ModelAttribution } from "./lib/models.js";
+import { createReadiness } from "./lib/readiness.js";
+import { clientIp } from "./lib/client-ip.js";
 
 const askSchema = z
   .object({
@@ -38,11 +41,13 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
   const config = options.config || readConfig();
   const store = options.store || createStore(config);
   const providers = options.providers || createProviders(config);
+  const ready = createReadiness(store);
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", config.trustProxyHops || false);
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader("Cache-Control", "no-store");
     const origin = req.headers.origin;
@@ -58,15 +63,24 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       exposedHeaders: ["Retry-After"],
     }),
   );
-  app.use(express.json({ limit: "16kb", strict: true }));
+
+  // Render's wake/platform probe needs no identity, body parser or dependency.
+  app.get("/health", (_req, res) => res.json({ status: "ok" }));
+  app.use((req, _res, next) => {
+    Object.defineProperty(req, "ip", { value: clientIp(req, config), configurable: true });
+    next();
+  });
 
   // A bounded, cheap IP throttle also protects auth/database/bot verification.
   // Provider budgets live in Postgres; this guard resetting cannot reset those.
   const bursts = new Map<string, { count: number; until: number }>();
+  let nextBurstSweep = 0;
   app.use((req, _res, next) => {
     const now = Date.now();
-    if (bursts.size >= 10000)
+    if (now >= nextBurstSweep || bursts.size >= 10000) {
       for (const [key, value] of bursts) if (value.until < now) bursts.delete(key);
+      nextBurstSweep = now + 60000;
+    }
     const key = req.ip || "unknown";
     let entry = bursts.get(key);
     if (!entry || entry.until < now) {
@@ -80,18 +94,47 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
     next();
   });
 
-  app.get("/health", (_req, res) =>
-    res.json({
-      status: "ok",
-      searchConfigured: config.configured,
-      guestsEnabled: config.guestsEnabled,
-      answerMode: config.aiProvider === "none" ? "sources-only" : "ai",
-    }),
-  );
+  // Local capacity guard complements durable shared quotas. It is deliberately
+  // not described as a distributed verification/auth rate limit.
+  let inflight = 0, verifying = 0;
+  const verifications = new Map<string, { count: number; until: number }>();
+  app.use((req, res, next) => {
+    if (config.production && /^\/requestlity_nuelexity\/?$/i.test(req.path))
+      return next(new AppError(404, "NOT_FOUND", "Endpoint not found."));
+    if (req.path === "/health") return next();
+    const verification = req.path === "/guest/session" && req.method === "POST";
+    if (verification) {
+      const now = Date.now();
+      for (const [key, entry] of verifications) if (entry.until <= now) verifications.delete(key);
+      const ip = req.ip || "unknown";
+      const entry = verifications.get(ip) || { count: 0, until: now + 60000 };
+      if (++entry.count > 6 || (!verifications.has(ip) && verifications.size >= 10000))
+        return next(new AppError(429, "VERIFICATION_LIMIT", "Too many verification attempts. Wait a minute.", 60));
+      verifications.set(ip, entry);
+    }
+    if (inflight >= config.maxInflight || (verification && verifying >= 4))
+      return next(new AppError(503, "SERVER_BUSY", "The research workspace is busy. Try again shortly.", 5));
+    inflight++;
+    if (verification) verifying++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      inflight--;
+      if (verification) verifying--;
+      res.off("finish", release);
+      res.off("close", release);
+    };
+    res.once("finish", release);
+    res.once("close", release);
+    next();
+  });
+  app.use(express.json({ limit: "16kb", strict: true }));
+
   app.get("/ready", async (_req, res) => {
     if (!config.configured)
       throw new AppError(503, "NOT_CONFIGURED", "Search configuration is incomplete.");
-    await store.ready();
+    await ready();
     res.json({ status: "ready" });
   });
   app.get("/models", async (req, res) => {
@@ -135,7 +178,9 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       if (!res.writableEnded) controller.abort();
     };
     res.on("close", onClose);
+    if (res.destroyed) onClose();
     try {
+      controller.signal.throwIfAborted();
       await providers.verifyGuest(
         input.data.turnstileToken,
         req.ip || req.socket.remoteAddress || "unknown",
@@ -233,6 +278,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       if (!res.writableEnded) controller.abort(new AppError(499, "CANCELLED", "Search stopped."));
     };
     res.on("close", onClose);
+    if (res.destroyed) onClose();
     const signal = controller.signal;
     const requestId = randomUUID();
     const ip = req.ip || req.socket.remoteAddress || "unknown";
@@ -247,12 +293,12 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       savedAssistant = false;
     let actualModel: ModelAttribution | null = null;
     let requestedModel = input.modelId || config.groqModel;
-    const send = (event: string, data: unknown) => {
-      signal.throwIfAborted();
-      if (!res.destroyed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
+    const send = (event: string, data: unknown) => writeEvent(res, signal, event, data);
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     try {
+      signal.throwIfAborted();
+      await ready();
+      signal.throwIfAborted();
       if (!userId) {
         checkGuestSetup();
         if (req.get("X-Guest-Pass")) {
@@ -313,19 +359,19 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
         savedUser = true;
       }
       res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Cache-Control", "private, no-store, no-transform");
       res.setHeader("X-Accel-Buffering", "no");
       res.flushHeaders();
-      send("meta", {
+      await send("meta", {
         requestId,
         conversationId,
         answerMode: config.aiProvider === "none" ? "sources-only" : "ai",
         remaining: reservation.remaining,
         requestedModelId: config.aiProvider === "groq" ? requestedModel : null,
       });
-      send("status", { stage: "searching" });
+      await send("status", { stage: "searching" });
       heartbeat = setInterval(() => {
-        if (!res.destroyed && !signal.aborted) res.write(": keep-alive\n\n");
+        if (!res.destroyed && !signal.aborted && !res.writableNeedDrain) res.write(": keep-alive\n\n");
       }, 10000);
       // Short follow-ups get the last user question as extra retrieval context.
       const lastQuestion = [...history].reverse().find((m) => m.role === "user")?.content;
@@ -333,8 +379,8 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
         ? `${lastQuestion.slice(0, 400)}\nFollow-up: ${input.query}`.slice(0, 1000)
         : input.query;
       sources = await providers.search(retrievalQuery, signal);
-      send("sources", { sources });
-      send("status", { stage: "answering" });
+      await send("sources", { sources });
+      await send("status", { stage: "answering" });
       const generation = providers.answer(input.query, sources, history, signal, requestedModel);
       const sections = new AnswerSections();
       try {
@@ -352,7 +398,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
               "Pardon we're still underr development and we set some limitations\n This answer is too long. Try a narrower question.",
             );
           answer += text;
-          if (text) send("delta", { text });
+          if (text) await send("delta", { text });
         }
       } finally {
         await generation.return(null);
@@ -380,8 +426,8 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
         });
         savedAssistant = true;
       }
-      send("follow_ups", { questions: suggestions });
-      send("done", { conversationId, model: actualModel, answerKind });
+      await send("follow_ups", { questions: suggestions });
+      await send("done", { conversationId, model: actualModel, answerKind });
       res.end();
     } catch (error) {
       const failure = publicError(signal.aborted ? signal.reason : error);

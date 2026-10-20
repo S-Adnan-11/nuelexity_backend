@@ -1,5 +1,7 @@
 # Nuelexity backend
 
+Render Free backend release preparation and exact dashboard fields are in [docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md). It uses the generated HTTPS hostname, one Free instance, minimal process health and bounded shared readiness. The frontend is prepared locally and will ship separately.
+
 A Node.js/Express research API with Tavily retrieval, optional Groq answer streaming, Supabase OAuth verification, private conversation history, and durable free-tier quota enforcement.
 
 ## Run locally with npm
@@ -121,3 +123,9 @@ bun run dev
 ```
 
 `package-lock.json` is the only committed lockfile and the reproducible install/CI contract is `npm ci`. Bun imports that lockfile. Its generated `bun.lock` is local/ignored; it is not a second source of truth. Before reinstalling with Bun after npm dependency edits, remove the local Bun lock with `node -e "require('node:fs').rmSync('bun.lock', {force:true})"` so it imports the current npm lock. Do not use `bun test` or run the old TypeScript/Bun server directly. The supported runtime is Node, including when scripts are invoked by Bun. After dependency changes, use `npm install`, commit `package.json` and `package-lock.json` together, and verify `npm ci`; do not commit generated Bun locks.
+
+## Predeployment review
+
+See [data/storage inventory and policy assumptions](docs/DATA_INVENTORY.md), [threat model and launch checklist](docs/THREAT_MODEL.md) and frontend [local delivery/owner actions](../../frontend/nuelexity_frontend/docs/PREDEPLOYMENT.md). No new SQL is required for this milestone. Keep already-applied migrations intact.
+
+`MAX_INFLIGHT_REQUESTS` defaults to 8 active non-health requests per process (1–32). Overload returns 503/Retry-After; guest exchanges also have <=4 active verification requests and 6 attempts/IP/minute. These memory guards complement atomic database search quotas and do not coordinate replicas. Use one small beta instance until shared verification/auth rate protection and actual host limits are reviewed. Production denies `/requestlity_nuelexity` without editing its preserved development handler. SSE respects client backpressure and sends private/no-store/no-transform headers. Provider JSON is bounded before parsing.

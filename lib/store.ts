@@ -135,10 +135,13 @@ export function createStore(config: Config, http: SupabaseFetch = fetch): Store 
         method: "POST",
         body: JSON.stringify({ p_subject: subject, p_request_id: requestId }),
       }),
-    async ready() {
-      await request("nuelexity_usage?select=subject&limit=0");
-      await request("nuelexity_conversations?select=selected_model&limit=0");
-      await request("nuelexity_messages?select=model,answer_kind&limit=0");
+    async ready(signal) {
+      await Promise.all([
+        request("nuelexity_usage?select=subject&limit=0", { signal }),
+        request("nuelexity_leases?select=subject&limit=0", { signal }),
+        request("nuelexity_conversations?select=selected_model&limit=0", { signal }),
+        request("nuelexity_messages?select=model,answer_kind&limit=0", { signal }),
+      ]);
     },
   };
 }

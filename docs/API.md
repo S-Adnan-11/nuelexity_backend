@@ -4,8 +4,8 @@ The backend defaults to `http://localhost:3002`. Use `Content-Type: application/
 
 ## Health and readiness
 
-- `GET /health`: liveness and non-secret setup flags: `{status, searchConfigured, guestsEnabled, answerMode}`. Does not call providers or prove database readiness.
-- `GET /ready`: verifies required server settings and quota-table access. Returns 503 until the migration/settings are ready. No search/model calls.
+- `GET /health`: process-only `{status:"ok"}`. No database/provider calls, writes, quota or internal diagnostics. Suitable for Render process checks and fallback wake-up. Runs outside capacity/IP guards; exact CORS/security headers still apply.
+- `GET /ready`: validates production settings and zero-row access to usage/leases/model persistence columns. One in-flight check; 2.5-second total deadline, 30-second success/5-second failure cache. No Auth/verification/search/model calls or writes. Returns `{status:"ready"}` or 503 `NOT_CONFIGURED`/`READINESS_UNAVAILABLE` (Retry-After 5 for dependency failure). It cannot prove provider availability. Search also requires readiness before quota/provider work.
 
 ## Model catalogue and choice
 
@@ -96,3 +96,11 @@ Model errors include `UNKNOWN_MODEL` (400), `MODEL_SIGN_IN_REQUIRED` (403), `MOD
 The additive `202610140001_model_selection.sql` migration is required before serving the updated persistence routes. `/ready` checks its columns with zero-row reads and returns 503 if absent. See [model-selection delivery and adoption](MODEL_SELECTION.md) for exact application/verification steps and the distinction between offline tests and live provider checks.
 
 Empty `/signup` and `/login` endpoints now return 410 with instructions to use Supabase OAuth. The preserved `/requestlity_nuelexity` dummy handler is a separate development artifact; it does not follow this protocol or call providers.
+
+## Predeployment reliability and private caching
+
+All API responses are no-store and carry `X-Robots-Tag: noindex, nofollow`; authenticated/guest SSE explicitly uses `private, no-store, no-transform`. Keep intermediary buffering/caching disabled. A per-process active-request cap (`MAX_INFLIGHT_REQUESTS`, default 8) returns 503 `SERVER_BUSY` with `Retry-After: 5` before extra work. Guest exchanges also allow at most 4 active requests and 6 attempts/IP/minute; excess returns 429 `VERIFICATION_LIMIT`. The existing broad IP throttle remains. These are local guards, not shared replica limits; search budgets/leases remain atomic PostgreSQL operations. Frontends must offer manual recovery, not automatic paid-provider retries. Production returns 404 for the preserved dummy endpoint. No request/event/schema contract or migration changed.
+
+## Render startup integration
+
+See [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) for the entry-path trace. Reuse the first existing safe session/catalogue/history GET to wake the service; share bounded startup/readiness waiting across other reads. Use health only if no existing early read exists. Never put a Turnstile POST or search in a retry loop. Preserve a submitted draft until ready + normal authentication/verification, send once, cancel on navigation/identity changes. A search with uncertain acceptance is a manual recovery, never an automatic replay. Render HTML/non-JSON/platform timeouts need an honest starting/unavailable state. Startup has a separate deadline from generation. Guest clearance, ownership and durable quota contracts are unchanged.

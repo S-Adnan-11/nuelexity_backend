@@ -1,3 +1,4 @@
+import { boundedJson } from "./bounded-json.js";
 import { z } from "zod";
 import { boundedPrompt, SYSTEM_PROMPT } from "../prompts.js";
 import type { Config } from "./config.js";
@@ -51,7 +52,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           );
         const parsed = z.object({
           data: z.array(z.object({ id: z.string(), active: z.boolean().optional() })),
-        }).safeParse(await response.json());
+        }).safeParse(await boundedJson(response, 131072));
         if (!parsed.success)
           throw new AppError(
             503,
@@ -107,7 +108,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           "SEARCH_UNAVAILABLE",
           "Web search is temporarily unavailable. Please try again later.",
         );
-      const parsed = resultsSchema.safeParse(await response.json());
+      const parsed = resultsSchema.safeParse(await boundedJson(response, 262144));
       if (!parsed.success)
         throw new AppError(502, "INVALID_SEARCH", "Web search returned an invalid response.");
       const seen = new Set<string>();
@@ -286,7 +287,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           "BOT_CHECK_UNAVAILABLE",
           "Verification is temporarily unavailable.",
         );
-      const result = (await response.json()) as {
+      const result = (await boundedJson(response, 16384)) as {
         success?: boolean;
         hostname?: string;
         action?: string;
