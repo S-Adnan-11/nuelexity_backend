@@ -1,7 +1,7 @@
 import type { Config } from "./config.js";
 import { AppError } from "./errors.js";
 
-// This is an owner-approved catalogue, never an import of every Groq model.
+// Expose only these models, even when Groq lists additional ones.
 export const APPROVED_MODELS = [
   { id: "openai/gpt-oss-20b", name: "GPT-OSS 20B", preview: false },
   { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B", preview: false },

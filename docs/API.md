@@ -7,6 +7,13 @@ The backend defaults to `http://localhost:3002`. Use `Content-Type: application/
 - `GET /health`: process-only `{status:"ok"}`. No database/provider calls, writes, quota or internal diagnostics. Suitable for Render process checks and fallback wake-up. Runs outside capacity/IP guards; exact CORS/security headers still apply.
 - `GET /ready`: validates production settings and zero-row access to usage/leases/model persistence columns. One in-flight check; 2.5-second total deadline, 30-second success/5-second failure cache. No Auth/verification/search/model calls or writes. Returns `{status:"ready"}` or 503 `NOT_CONFIGURED`/`READINESS_UNAVAILABLE` (Retry-After 5 for dependency failure). It cannot prove provider availability. Search also requires readiness before quota/provider work.
 
+A local process check does not need credentials:
+
+```sh
+curl -fsS http://localhost:3002/health
+# {"status":"ok"}
+```
+
 ## Model catalogue and choice
 
 `GET /models` returns `{defaultModelId, canSelect, answerMode, models}`. An optional Bearer token is verified by Supabase; `canSelect` comes from that verified identity. An invalid token returns 401 rather than guest access. Each model has `{id, name, provider: "Groq", preview, available, unavailableReason?, maxInputBytes, maxOutputTokens}`. The backend's explicit approved catalogue contains only GPT-OSS 20B, GPT-OSS 120B, and Qwen 3.8 27B (Preview). Groq serves these models; it is not their creator.
@@ -93,14 +100,14 @@ Status codes: 400 invalid body/ID/context, 401 auth, 403 origin/bot check, 404 m
 
 Model errors include `UNKNOWN_MODEL` (400), `MODEL_SIGN_IN_REQUIRED` (403), `MODEL_UNAVAILABLE`/`MODEL_PERMISSION` (409), `MODEL_RATE_LIMIT` (429), `MODEL_CATALOGUE_UNAVAILABLE`/`ANSWER_UNAVAILABLE` (503), and incomplete/mismatched attribution errors (502). After stream start they use terminal SSE errors, with `retryAfter` when supplied. The UI preserves partial output, restores the draft question and requires a manual new submission. No model or sources-only fallback is automatic.
 
-The additive `202610140001_model_selection.sql` migration is required before serving the updated persistence routes. `/ready` checks its columns with zero-row reads and returns 503 if absent. See [model-selection delivery and adoption](MODEL_SELECTION.md) for exact application/verification steps and the distinction between offline tests and live provider checks.
+The additive `202610140001_model_selection.sql` migration is required before serving the updated persistence routes. `/ready` checks its columns with zero-row reads and returns 503 if absent. See [model selection and attribution](MODEL_SELECTION.md) and the [database guide](DATABASE.md) for migration and verification steps.
 
 Empty `/signup` and `/login` endpoints now return 410 with instructions to use Supabase OAuth. The preserved `/requestlity_nuelexity` dummy handler is a separate development artifact; it does not follow this protocol or call providers.
 
-## Predeployment reliability and private caching
+## Capacity and response caching
 
-All API responses are no-store and carry `X-Robots-Tag: noindex, nofollow`; authenticated/guest SSE explicitly uses `private, no-store, no-transform`. Keep intermediary buffering/caching disabled. A per-process active-request cap (`MAX_INFLIGHT_REQUESTS`, default 8) returns 503 `SERVER_BUSY` with `Retry-After: 5` before extra work. Guest exchanges also allow at most 4 active requests and 6 attempts/IP/minute; excess returns 429 `VERIFICATION_LIMIT`. The existing broad IP throttle remains. These are local guards, not shared replica limits; search budgets/leases remain atomic PostgreSQL operations. Frontends must offer manual recovery, not automatic paid-provider retries. Production returns 404 for the preserved dummy endpoint. No request/event/schema contract or migration changed.
+All API responses are no-store and carry `X-Robots-Tag: noindex, nofollow`; authenticated/guest SSE explicitly uses `private, no-store, no-transform`. Keep intermediary buffering/caching disabled. A per-process active-request cap (`MAX_INFLIGHT_REQUESTS`, default 8) returns 503 `SERVER_BUSY` with `Retry-After: 5` before extra work. Guest exchanges also allow at most 4 active requests and 6 attempts/IP/minute; excess returns 429 `VERIFICATION_LIMIT`. The existing broad IP throttle remains. These are local guards, not shared replica limits; search budgets/leases remain atomic PostgreSQL operations. Frontends must offer manual recovery, not automatic paid-provider retries. Production returns 404 for the preserved dummy endpoint.
 
-## Render startup integration
+## Startup and recovery
 
-See [RENDER_DEPLOYMENT.md](RENDER_DEPLOYMENT.md) for the entry-path trace. Reuse the first existing safe session/catalogue/history GET to wake the service; share bounded startup/readiness waiting across other reads. Use health only if no existing early read exists. Never put a Turnstile POST or search in a retry loop. Preserve a submitted draft until ready + normal authentication/verification, send once, cancel on navigation/identity changes. A search with uncertain acceptance is a manual recovery, never an automatic replay. Render HTML/non-JSON/platform timeouts need an honest starting/unavailable state. Startup has a separate deadline from generation. Guest clearance, ownership and durable quota contracts are unchanged.
+Use safe readiness or session reads to coordinate backend startup. Wait for readiness and normal auth/guest clearance before sending a question. The browser can keep editing the draft while waiting. Do not automatically replay a search or a verification token after a timeout; the server may already have accepted it. See [Render deployment](RENDER_DEPLOYMENT.md) for hosting behavior.

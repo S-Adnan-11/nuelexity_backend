@@ -1,31 +1,37 @@
-# Owner setup checklist
+# Configure a development environment
 
-## Render backend milestone — 2026-10-20
+Use a development Supabase project. The [database guide](DATABASE.md) lists the migrations in order. Installing dependencies does not create a project or apply SQL.
 
-Owner selected Render Free, its generated HTTPS hostname, one instance and a public learning beta. Follow [the backend-only release runbook](RENDER_DEPLOYMENT.md) before older hosting guidance below. Existing stable signing/provider/Supabase settings and all applied SQL are preserved. `/health` now returns only process status; `/ready` deduplicates bounded zero-row storage checks. No Render account is connected in this session yet; do not infer a live URL. Intended frontend: `https://nuelexity.devs.surf`. Confirmed developer: Adnan Muhammad Sadiq, GitHub `S-Adnan-11`, portfolio `https://s-adnan.dev`; support/privacy `s.adnan.werk@gmail.com`. Remaining policy and real-host acceptance are explicit in the runbook.
+## Backend
 
-## Predeployment follow-on — 2026-10-19
+Run `npm run env:init` and fill `.env` using [.env.example](../.env.example). The local API defaults to port 3002.
 
-No migration is required for the account/About/legal/SEO milestone. Do not repeat the three migrations already confirmed applied. Keep Node/npm and optional Bun setup below. `MAX_INFLIGHT_REQUESTS` defaults to 8 per process; it complements shared SQL quotas and is not a distributed verification limiter. Production blocks the preserved dummy endpoint. Frontend production startup is held until operator/contact and final legal decisions are complete; review via `npm run preview:local`. See [data inventory/policy decisions](DATA_INVENTORY.md), [threat model](THREAT_MODEL.md) and [exact external dashboard/acceptance actions](../../../frontend/nuelexity_frontend/docs/PREDEPLOYMENT.md). Nothing external was changed. Older verification dates below are historical.
+| Setting | Value or purpose |
+| --- | --- |
+| `SUPABASE_URL` | Development project HTTPS URL |
+| `SUPABASE_PUBLISHABLE_KEY` | Project's public auth key |
+| `SUPABASE_SECRET_KEY` | Server-only project key for storage and quota operations |
+| `TAVILY_API_KEY` | Retrieval key |
+| `GUEST_ID_SECRET` | Stable random signing secret, at least 32 characters |
+| `AI_PROVIDER` | `none` for retrieved excerpts, or `groq` for model synthesis |
+| `GROQ_API_KEY` | Server-only model key when using Groq |
+| `GROQ_MODEL` | Optional default model; see [the catalogue](MODEL_SELECTION.md) |
+| `FRONTEND_ORIGINS` | Comma-separated exact frontend origins |
+| `TURNSTILE_SECRET_KEY` | Server-side counterpart to the frontend site key, required in production |
 
-All code changes are local. No provider plan was upgraded and no existing conversation data or schema was mutated during verification. The original foundation checks spent no provider credits; the model-selection checks on 2026-10-14 made exactly three bounded Groq generations and retained their three durable quota reservations.
+Generate the guest signing secret locally, store it in server configuration, and keep it stable across restarts. Only use `CLIENT_IP_MODE=render` for the managed Render ingress described in the [deployment guide](RENDER_DEPLOYMENT.md). Local settings use `CLIENT_IP_MODE=socket` and `TRUST_PROXY_HOPS=0`.
 
-## Current model-selection adoption
+Run `npm run config:check` before starting the API. Missing settings are reported by name. The optional `-- --remote` check contacts configured services for credential, schema and usage metadata. It does not prove that browser OAuth or Turnstile works.
 
-The owner's existing Groq key, Free account and Turnstile setup were preserved. All three approved models generated successfully. Zero-row checks on 2026-10-15 confirmed the model-selection columns are present in the owner’s project. Do not reapply SQL based on the older missing-column note. New projects need `supabase/migrations/202610140001_model_selection.sql` after the foundation and hardening migrations, then its read-only verification SQL and `npm run schema:check`. See [exact migration instructions, verification evidence and manual review](MODEL_SELECTION.md). No new credential or environment setting is needed; do not rerun the existing foundation migrations.
+## Frontend and auth
 
-## Original foundation setup reference
+Use the same Supabase project in the [frontend](https://github.com/S-Adnan-11/nuelexity_frontend#run-locally). For OAuth, configure Google and GitHub in Supabase, and allow `http://localhost:3000/auth/callback` plus the exact deployed frontend callback if applicable. The provider application's callback points to Supabase's `/auth/v1/callback`. Keep OAuth client secrets in the Supabase provider settings, never in the browser build.
 
-1. **Supabase SQL:** run `supabase/migrations/202610050001_research_foundation.sql` once, then `supabase/migrations/202610060001_secure_legacy_tables.sql`, in your project's SQL Editor. The foundation is compatible with the supplied historical migration 2 and stays unchanged. The second file keeps legacy data while enabling RLS and blocking direct browser access to old tables; the current app uses the new tables. Read `docs/DATABASE.md` for details and the read-only audit. Do not rerun the historical migration 2, which drops tables and deletes history.
-2. **Backend environment:** existing Supabase/Tavily settings remain compatible. A stable `GUEST_ID_SECRET` was generated locally without printing it. For new machines, use the canonical names in `.env.example`; do not overwrite an existing `.env`. `AI_PROVIDER=none` is the default.
-3. **Optional AI answers:** create a Groq Free API key, add `GROQ_API_KEY` (Q, not K), and set `AI_PROVIDER=groq`. The default model is `openai/gpt-oss-20b`; confirm it in your account's available models and keep the account on Free. Keeping `none` supports real web search excerpts immediately after database setup.
-4. **OAuth:** in Supabase Auth, allow `http://localhost:3000/auth/callback` and future deployment callbacks. Google/GitHub OAuth applications should use Supabase's callback URL. Account creation happens through OAuth; there are no custom password signup/login endpoints.
-5. **Free plan controls:** verify Tavily pay-as-you-go is disabled and any Groq account remains Free. Avoid sharing production keys with experiments if you want the app's budget limits to cover all provider usage.
-6. **Public guest access:** create a Turnstile widget with approved frontend hostnames. Set `TURNSTILE_SECRET_KEY` on the backend and `BUN_PUBLIC_TURNSTILE_SITE_KEY` on the frontend. Production guest searches are disabled until this exists.
-7. **Verify:** run both repos' `npm run check`. In the backend run `npm run config:check -- --remote` for safe configuration and metadata checks; it never searches, generates answers, reserves quota, or reads conversation rows. Start backend `npm run dev` and frontend `npm run dev`. Restart after environment changes. Open `/ready` on the backend; it should return 200 after setup. Test one guest request and one owned signed-in thread, then stop if provider limits/configuration fail. A Google/GitHub account belongs to `auth.users`; no duplicate legacy `public.users` row is required.
+For production guest access, pair the public Turnstile site key with its server secret and configure the widget for the frontend hostname. The API checks the submitted token before issuing a guest pass. A successful sign-in is not required for guest research; it is required to save history.
 
-Verification on 2026-10-07 confirmed remote migration objects, blocked anonymous legacy/quota reads, enabled Google/GitHub providers, valid Supabase/Groq/Tavily credentials, and a Turnstile secret that rejects invalid tokens. The running backend returned 200 from `/ready`, and frontend/backend public settings agree. The local key spelling was corrected and an available Groq model pinned. Actual OAuth return allowlists and Turnstile hostname/site-key pairing require browser verification. Tavily is on Researcher with 1,000 plan credits available; its API reports an unspecified pay-as-you-go limit, so confirm Billing manually. Groq billing status is not exposed by the models endpoint.
+## Troubleshooting
 
-No hosting was provisioned. Choose a free deployment path after this local flow and remote database checks pass. Keep the backend behind a trusted HTTPS proxy and configure exact frontend origins. A zero-budget prototype necessarily has limited availability and throughput; app quotas protect allowance but cannot make free providers unlimited.
-
-The owner subsequently confirmed Tavily pay-as-you-go is OFF, Groq is on Free, and live searches return answers and follow-ups. Guest verification now exchanges the Turnstile token for a two-hour signed pass retained in the same browser tab across refreshes. All quotas still apply, and an expired/IP-mismatched pass requires verification again. No dashboard or SQL change is needed for this improvement.
+- If `/health` succeeds but `/ready` returns 503, check the backend environment and the required Supabase schema first.
+- If the browser cannot call the API, check `BUN_PUBLIC_BACKEND_URL` and the exact allowed frontend origin. Origins do not include paths.
+- If OAuth returns to the wrong host, check the frontend callback allowlist and Supabase Site URL. Restart the corresponding local server after configuration changes.
+- Sources-only mode still makes retrieval calls. For checks that use neither search nor model credits, use `npm run check` or the documented browser fixtures.
