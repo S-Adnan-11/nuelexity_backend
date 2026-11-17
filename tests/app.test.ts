@@ -124,6 +124,69 @@ async function fixture(
   return { base, ask, calls, config };
 }
 
+describe("first-party evidence through the existing search contract", () => {
+  test("guest and signed-in product answers reserve quotas, skip Tavily, and preserve model/source metadata", async () => {
+    for (const token of [undefined, "good"]) {
+      const { ask, calls, base } = await fixture({ config: { aiProvider: "groq" } });
+      const body = await (await ask({ query: "Who created Nuelexity?" }, token)).text();
+      expect(calls.searches).toBe(0);
+      expect(calls.guestChecks).toBe(token ? 0 : 1);
+      expect(calls.reserves).toBe(1);
+      expect(calls.releases).toBe(1);
+      expect(calls.answers).toBe(1);
+      expect(body).toContain('"answerKind":"ai"');
+      expect(body).toContain('"id":"openai/gpt-oss-20b"');
+      expect(body).toContain('"id":1,"title":"About Nuelexity"');
+      if (token) {
+        const saved = calls.saved[1]!;
+        const reloaded = await (await fetch(`${base}/conversations/${id}`, { headers: { Authorization: "Bearer good" } })).json();
+        expect(reloaded.messages[1].sources).toEqual(saved.sources);
+        expect(reloaded.messages[1].model).toEqual(saved.model);
+      }
+    }
+  });
+  test("mixed product questions combine evidence under five stable IDs; incidental mentions keep the web path", async () => {
+    let selected: import("../lib/types.js").Source[] = [];
+    const { ask, calls } = await fixture({ config: { aiProvider: "groq" }, providers: {
+      search: async () => Array.from({ length: 5 }, (_, i) => ({ id: i + 1, title: `Web ${i}`, url: `https://example.test/${i}`, snippet: "Public evidence" })),
+      answer: async function* (_query, sources) {
+        selected = sources; yield "Supported comparison [1] [3].";
+        return { ...APPROVED_MODELS[0], provider: "Groq" };
+      },
+    } });
+    const body = await (await ask({ query: "Compare Nuelexity with Perplexity" })).text();
+    expect(selected.map(s => s.id)).toEqual([1,2,3,4,5]);
+    expect(selected[0]!.url).toContain("/about");
+    expect(selected[2]!.url).toBe("https://example.test/0");
+    expect(body).toContain('"answerKind":"ai"');
+    expect(calls.reserves).toBe(1);
+    await (await ask({ query: "Using Nuelexity, explain photosynthesis" })).text();
+    expect(selected[0]!.url).toBe("https://example.test/0");
+  });
+  test("product-only sources mode makes zero search or generation HTTP calls; missing evidence remains no-sources", async () => {
+    const { ask, calls } = await fixture({ providers: {
+      answer: createProviders(readConfig({}), async () => { throw new Error("No provider HTTP"); }).answer,
+    } });
+    const body = await (await ask({ query: "What is Nuelexity?" })).text();
+    expect(calls.searches).toBe(0);
+    expect(body).toContain('"answerKind":"sources-only"');
+    expect(body).toContain('"model":null');
+    const empty = await fixture({ providers: { search: async () => [],
+      answer: createProviders(readConfig({ AI_PROVIDER: "groq" }), async () => { throw new Error("No provider HTTP"); }).answer,
+    } });
+    const noSources = await (await empty.ask({ query: "Unrelated research question" })).text();
+    expect(noSources).toContain('"answerKind":"no-sources"');
+  });
+  test("a denied product request still fails before all provider work", async () => {
+    const { ask, calls } = await fixture({ store: { reserve: async () => ({ allowed: false, code: "DAILY_LIMIT", retryAfter: 42 }) } });
+    const response = await ask({ query: "What is Nuelexity?" });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("42");
+    expect(calls.searches).toBe(0);
+    expect(calls.answers).toBe(0);
+  });
+});
+
 describe("guest verification session", () => {
   test("one verified pass covers repeated searches and refreshed session checks without resetting quota identity", async () => {
     const { base, ask, calls } = await fixture({ turnstile: true });

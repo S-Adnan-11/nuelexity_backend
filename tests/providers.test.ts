@@ -28,7 +28,7 @@ test("Tavily is basic, never auto-upgrades/retries, filters unsafe URLs and clip
       search_depth: "basic",
       auto_parameters: false,
       include_answer: false,
-      max_results: 5,
+      max_results: 8,
     });
     return Response.json({
       results: [
@@ -59,6 +59,15 @@ test("sources-only mode never calls a model and labels excerpts honestly", async
     text += delta;
   expect(text).toContain("not an AI-synthesized answer");
   expect(text).toContain("Evidence");
+});
+
+test("search provider throttling exposes timing without a retry or model call", async () => {
+  let calls = 0;
+  const providers = createProviders(readConfig({}), async () => {
+    calls++; return new Response(null, { status: 429, headers: { "Retry-After": "21" } });
+  });
+  await expect(providers.search("Synthetic query", signal)).rejects.toMatchObject({ code: "SEARCH_RATE_LIMIT", retryAfter: 21 });
+  expect(calls).toBe(1);
 });
 test("Groq streams all deltas and requires successful finish plus done", async () => {
   const config = readConfig({ AI_PROVIDER: "groq" });

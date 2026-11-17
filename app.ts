@@ -17,6 +17,8 @@ import { APPROVED_MODELS, selectModel } from "./lib/models.js";
 import type { ModelAttribution } from "./lib/models.js";
 import { createReadiness } from "./lib/readiness.js";
 import { clientIp } from "./lib/client-ip.js";
+import { combineSources, retrievalQuery } from "./lib/retrieval.js";
+import { productRoute, productSources } from "./lib/product-knowledge.js";
 
 const askSchema = z
   .object({
@@ -373,12 +375,11 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       heartbeat = setInterval(() => {
         if (!res.destroyed && !signal.aborted && !res.writableNeedDrain) res.write(": keep-alive\n\n");
       }, 10000);
-      // Short follow-ups get the last user question as extra retrieval context.
-      const lastQuestion = [...history].reverse().find((m) => m.role === "user")?.content;
-      const retrievalQuery = lastQuestion
-        ? `${lastQuestion.slice(0, 400)}\nFollow-up: ${input.query}`.slice(0, 1000)
-        : input.query;
-      sources = await providers.search(retrievalQuery, signal);
+      const route = productRoute(input.query, history);
+      const firstParty = route === "web" ? [] : productSources();
+      const web = route === "product" ? [] : await providers.search(retrievalQuery(input.query, history), signal);
+      // Freeze the final IDs once, before streaming, generation or persistence.
+      sources = combineSources(firstParty, web);
       await send("sources", { sources });
       await send("status", { stage: "answering" });
       const generation = providers.answer(input.query, sources, history, signal, requestedModel);
