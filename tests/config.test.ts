@@ -9,6 +9,13 @@ const settings = {
   TAVILY_API_KEY: "search-key-test-only",
 };
 
+test("personal defaults rise while shared caps and explicit higher settings stay intact", () => {
+  expect(readConfig({})).toMatchObject({ guestDaily: 3, userDaily: 7, ipDaily: 12,
+    globalDaily: 25, globalMinute: 4, globalMonthly: 800 });
+  expect(readConfig({ GUEST_DAILY_LIMIT: "5", USER_DAILY_LIMIT: "12", IP_DAILY_LIMIT: "20" }))
+    .toMatchObject({ guestDaily: 5, userDaily: 12, ipDaily: 20 });
+});
+
 test("a misspelled Groq key explains the shared guest and account setup failure", () => {
   const config = readConfig({ ...settings, AI_PROVIDER: "groq", GROK_API_KEY: "typo-key" });
   expect(config.configured).toBe(false);
