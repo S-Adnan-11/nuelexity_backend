@@ -66,6 +66,7 @@ test("UTF-8 prompt trimming preserves question, priority and every final source 
   const question = "Which town in Kogi is served?";
   const prompt = boundedPrompt(question, sources, history("old ".repeat(250)), 6000);
   expect(Buffer.byteLength(SYSTEM_PROMPT + prompt) + 128).toBeLessThanOrEqual(6000);
+  expect(Buffer.byteLength(SYSTEM_PROMPT + prompt) + 128).toBeGreaterThan(5996);
   const parsed = JSON.parse(prompt);
   expect(parsed.question).toBe(question);
   expect(parsed.untrustedSearchEvidence.map((s: {id: number}) => s.id)).toEqual([1,2,3,4,5]);
