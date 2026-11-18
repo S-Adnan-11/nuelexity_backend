@@ -767,3 +767,16 @@ test('Render IP-bound pass survives app restart and ignores spoofed unrelated fo
   expect((await check('203.0.113.2')).verified).toBe(false);
   expect((await fetch(restarted.base + '/guest/session')).status).toBe(503);
 });
+
+test("compressed JSON and malformed or oversized guest history use the normal parser and validation", async () => {
+  const { gzipSync } = await import("node:zlib");
+  const { base, calls, ask } = await fixture();
+  const post = (json: string) => fetch(base + "/nuelexity_ask", {
+    method: "POST", headers: { "Content-Type": "application/json", "Content-Encoding": "gzip" },
+    body: new Uint8Array(gzipSync(json)),
+  });
+  expect((await post("{")).status).toBe(400);
+  expect((await ask({ query: "test", history: Array.from({ length: 7 }, () => ({role:"user", content:"a"})) })).status).toBe(400);
+  expect(calls.reserves).toBe(0);
+  expect(await (await post(JSON.stringify({query:"bounded example"}))).text()).toContain("event: done");
+});
