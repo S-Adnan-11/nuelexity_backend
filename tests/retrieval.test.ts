@@ -117,3 +117,13 @@ test("route clarification depends on forward service evidence and requested mode
     expect(needsRouteClarification(q, [text])).toBe(true);
   expect(needsRouteClarification("Explain RSA key generation", [])).toBe(false);
 });
+
+test("a boundary before an exception cannot turn a conditional listing into an unconditional one", async () => {
+  const {wholeExcerpt} = await import("../lib/excerpt.js");
+  const intro = "Operator information.";
+  const claim = "A bus operates from Northport to Southport.";
+  const exception = "However, it operates only on Sundays.";
+  const text = [intro, claim, exception, "Archive details.".repeat(90)].join("\n\n");
+  expect(wholeExcerpt(text, intro.length + claim.length + 2)).toBe(intro);
+  expect(wholeExcerpt(text, 145)).toContain(exception);
+});

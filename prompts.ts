@@ -1,3 +1,4 @@
+import { evidencePassages } from "./lib/excerpt.js";
 import type { Message, Source } from "./lib/types.js";
 import { FOLLOW_UP_MARKER } from "./lib/follow-ups.js";
 
@@ -55,7 +56,7 @@ export function boundedPrompt(query: string, sources: Source[], history: Message
   if (!fits(prompt)) {
     // Allocate whole paragraphs in priority order, giving each source a
     // chance at its first paragraph before adding more to the same source.
-    const paragraphs = evidence.map(source => source.snippet.split(/\n\s*\n/));
+    const paragraphs = evidence.map(source => evidencePassages(source.snippet));
     for (const source of evidence) source.snippet = "";
     prompt = buildPrompt(query, evidence, context);
     if (!fits(prompt)) throw new Error("INPUT_LIMIT");
