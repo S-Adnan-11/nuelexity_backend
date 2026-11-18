@@ -1,6 +1,10 @@
+export const serviceWithdrawal = /\b(cancelled|canceled|suspended|withdrawn|discontinued|expired|ceased|no longer|last (?:ran|operated)|out of service|(?:does not|doesn't|did not|no) (?:run|operate|service))\b/i;
+
 // A condition in the following sentence can reverse the meaning of the
 // preceding one. Keep those sentences together when splitting long passages.
 function continuesPassage(text: string) {
+  const firstSentence = text.split(/(?<=[.!?])\s+/, 1)[0]!;
+  if (serviceWithdrawal.test(firstSentence)) return true;
   return /^(?:however|but|except|unless|only|subject to|provided that|this (?:does not|applies only)|(?:this|that|the) (?:service|route|timetable|schedule)|(?:service|it) (?:was|is|has|had|will|does|only)|(?:advance )?(?:reservations?|booking) (?:is|are)|valid (?:only|from|until|through)|as of|effective)\b/i.test(text.trim());
 }
 

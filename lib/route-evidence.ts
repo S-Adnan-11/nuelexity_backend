@@ -1,6 +1,5 @@
-import { evidencePassages } from "./excerpt.js";
+import { evidencePassages, serviceWithdrawal } from "./excerpt.js";
 
-const inactive = /\b(cancelled|canceled|suspended|withdrawn|discontinued|expired|ceased|no longer|last (?:ran|operated)|out of service)\b/i;
 const travelDate = /\b(?:today|tonight|tomorrow|yesterday|(?:this|next|last) (?:week|weekend|month)|(?:mon|tues|wednes|thurs|fri|satur|sun)days?|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|(?:in |on |of )may|may (?=\d)|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,4}[-/]\d{1,2}(?:[-/]\d{1,4})?|(?:on the )\d{1,2}(?:st|nd|rd|th))\b/i;
 
 // Interpret explicit timetable end years and ISO dates conservatively. A year
@@ -33,7 +32,7 @@ export function routeClarification(query: string, excerpts: string[], priorUserQ
         if (/\bfrom .+? to \S/i.test(next) && !direction.test(next)) break;
         passage += " " + next;
       }
-      return !inactive.test(passage) && !timetableEnded(passage, query);
+      return !serviceWithdrawal.test(passage) && !timetableEnded(passage, query);
     });
   });
   if (hasService) return null;

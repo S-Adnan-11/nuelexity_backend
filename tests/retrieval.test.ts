@@ -125,7 +125,8 @@ test("read the operating claim together with a subsequent cancellation", async (
   const q = "Can I travel by bus from Northport to Southport on Sunday?";
   const claim = "A bus runs from Northport to Southport on Sundays only.";
   const cancellation = "However, this service was cancelled last year.";
-  for (const passage of [claim + " " + cancellation, claim + "\n\nThis service was cancelled in 2025."]) {
+  for (const passage of [claim + " " + cancellation, claim + "\n\nThis service was cancelled in 2025.",
+      claim + "\n\nIn November 2025, the operator withdrew it and the route was discontinued."]) {
     const answer = routeClarification(q, [passage]);
     expect(answer).toContain("do not confirm service");
     expect(answer).toContain("timetable for both stops");
@@ -147,7 +148,7 @@ test("a boundary before an exception cannot turn a conditional listing into an u
   const text = [intro, claim, exception, "Archive details.".repeat(90)].join("\n\n");
   expect(wholeExcerpt(text, intro.length + claim.length + 2)).toBe(intro);
   expect(wholeExcerpt(text, 145)).toContain(exception);
-  for (const condition of ["This service was cancelled last year.", "Reservations are required.", "Valid through 2024."]) {
+  for (const condition of ["This service was cancelled last year.", "In 2025, the operator cancelled it.", "Reservations are required.", "Valid through 2024."]) {
     const qualified = [intro, claim, condition].join("\n\n");
     expect(wholeExcerpt(qualified, intro.length + claim.length + 2)).toBe(intro);
   }
