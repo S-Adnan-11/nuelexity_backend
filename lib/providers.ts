@@ -1,4 +1,4 @@
-import { needsRouteClarification } from "./route-evidence.js";
+import { routeClarification } from "./route-evidence.js";
 import { boundedJson } from "./bounded-json.js";
 import { z } from "zod";
 import { boundedPrompt, SYSTEM_PROMPT } from "../prompts.js";
@@ -141,8 +141,10 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
         );
       }
       const evidence = JSON.parse(prompt).untrustedSearchEvidence as { excerpt: string }[];
-      if (needsRouteClarification(query, evidence.map(source => source.excerpt))) {
-        yield "The retrieved excerpts do not establish service for the requested trip. Which destination town or terminal and travel date should I check?";
+      const clarification = routeClarification(query, evidence.map(source => source.excerpt),
+        history.filter(turn => turn.role === "user" && turn.status === "complete").slice(-6).map(turn => turn.content));
+      if (clarification) {
+        yield clarification;
         return "clarification";
       }
       const response = await http("https://api.groq.com/openai/v1/chat/completions", {

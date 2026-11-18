@@ -788,7 +788,7 @@ test("insufficient forward route evidence streams clarification with sources and
   }});
   const response = await ask({query:"How do I get from Northport to Southport by bus?"});
   const stream = await response.text();
-  expect(stream).toContain("Which destination town");
+  expect(stream).toContain("What date should I check");
   expect(stream).toContain('"model":null,"answerKind":"sources-only"');
   expect(calls.reserves).toBe(1);
 });

@@ -110,12 +110,33 @@ test("product follow-ups require a clear prior user topic; unknown dates and cha
 });
 
 test("route clarification depends on forward service evidence and requested mode", async () => {
-  const { needsRouteClarification } = await import("../lib/route-evidence.js");
+  const { routeClarification } = await import("../lib/route-evidence.js");
   const q = "How can I get from Northport to Southport by bus?";
-  expect(needsRouteClarification(q, ["A bus runs from Northport to Southport on Sundays only."])).toBe(false);
+  expect(routeClarification(q, ["A bus runs from Northport to Southport on Sundays only. Reservations are required."])).toBeNull();
   for (const text of ["A bus runs from Southport to Northport.", "No bus runs from Northport to Southport.", "A train operates from Northport to Southport."])
-    expect(needsRouteClarification(q, [text])).toBe(true);
-  expect(needsRouteClarification("Explain RSA key generation", [])).toBe(false);
+    expect(routeClarification(q, [text])).toContain("What date");
+  expect(routeClarification("Which bus goes from Northport to Hill County on Sunday?", [])).toContain("Which arrival town or terminal should I check?");
+  expect(routeClarification(q, ["Booking requires a destination town in Southport."])).toContain("arrival town or terminal and travel date");
+  expect(routeClarification("Explain RSA key generation", [])).toBeNull();
+});
+
+test("read the operating claim together with a subsequent cancellation", async () => {
+  const { routeClarification } = await import("../lib/route-evidence.js");
+  const q = "Can I travel by bus from Northport to Southport on Sunday?";
+  const claim = "A bus runs from Northport to Southport on Sundays only.";
+  const cancellation = "However, this service was cancelled last year.";
+  for (const passage of [claim + " " + cancellation, claim + "\n\nThis service was cancelled in 2025."]) {
+    const answer = routeClarification(q, [passage]);
+    expect(answer).toContain("do not confirm service");
+    expect(answer).toContain("timetable for both stops");
+    expect(answer).not.toContain("?");
+  }
+  expect(routeClarification(q, [claim + " Reservations are required."])).toBeNull();
+  expect(routeClarification(q, [claim + " The train from Eastport to Westport was cancelled."])).toBeNull();
+  const dated = claim + " This timetable was valid through 2024.";
+  expect(routeClarification(q.replace("Sunday", "2026-03-01"), [dated])).toContain("do not confirm");
+  expect(routeClarification(q.replace("Sunday", "2024-03-03"), [dated])).toBeNull();
+  expect(routeClarification("Can I travel by bus from Northport to Southport?", [], ["I leave on 2027-02-10."])).not.toContain("What date");
 });
 
 test("a boundary before an exception cannot turn a conditional listing into an unconditional one", async () => {
@@ -126,4 +147,8 @@ test("a boundary before an exception cannot turn a conditional listing into an u
   const text = [intro, claim, exception, "Archive details.".repeat(90)].join("\n\n");
   expect(wholeExcerpt(text, intro.length + claim.length + 2)).toBe(intro);
   expect(wholeExcerpt(text, 145)).toContain(exception);
+  for (const condition of ["This service was cancelled last year.", "Reservations are required.", "Valid through 2024."]) {
+    const qualified = [intro, claim, condition].join("\n\n");
+    expect(wholeExcerpt(qualified, intro.length + claim.length + 2)).toBe(intro);
+  }
 });
