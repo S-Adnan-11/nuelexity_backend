@@ -60,7 +60,7 @@ for (const model of APPROVED_MODELS) {
     while (true) {
       const chunk = await generation.next();
       if (chunk.done) {
-        console.log(JSON.stringify({ modelId: model.id, result: "completed", actualModelId: chunk.value?.id ?? null, characters }));
+        console.log(JSON.stringify({ modelId: model.id, result: "completed", actualModelId: chunk.value === "clarification" ? null : chunk.value?.id ?? null, characters }));
         break;
       }
       characters += chunk.value.length;

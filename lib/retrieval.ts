@@ -1,3 +1,4 @@
+import { wholeExcerpt } from "./excerpt.js";
 import type { Message, Source } from "./types.js";
 
 export function safeUrl(value: string): string | null {
@@ -51,7 +52,7 @@ export function selectSources(query: string, candidates: SearchCandidate[], now 
     const url = safeUrl(item.url);
     if (!url) return [];
     const key = sourceKey(url);
-    const title = clean(item.title, 200), snippet = clean(item.content || "", 1500);
+    const title = clean(item.title, 200), snippet = wholeExcerpt((item.content || "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, ""), 1500);
     // Score only the text that can actually become evidence. A provider score
     // signals relevance, never truth or current bookable service.
     const text = `${title} ${snippet}`.toLowerCase();

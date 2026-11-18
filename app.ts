@@ -383,12 +383,14 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       await send("sources", { sources });
       await send("status", { stage: "answering" });
       const generation = providers.answer(input.query, sources, history, signal, requestedModel);
+      let clarified = false;
       const sections = new AnswerSections();
       try {
         while (true) {
           const chunk = await generation.next();
           if (chunk.done) {
-            actualModel = chunk.value;
+            clarified = chunk.value === "clarification";
+            actualModel = chunk.value === "clarification" ? null : chunk.value;
             break;
           }
           const text = sections.push(chunk.value);
@@ -411,7 +413,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
           "No answer was returned. Your sources are still available.",
         );
       signal.throwIfAborted();
-      const answerKind = !sources.length ? "no-sources" : config.aiProvider === "none" ? "sources-only" : "ai";
+      const answerKind = !sources.length ? "no-sources" : clarified || config.aiProvider === "none" ? "sources-only" : "ai";
       const suggestions = answerKind === "ai" ? sections.suggestions(input.query, answer, sources, history) : [];
       if (answerKind === "ai" && (!actualModel || actualModel.id !== requestedModel))
         throw new AppError(502, "MODEL_UNCONFIRMED", "The answer's model could not be confirmed. Try again later.");

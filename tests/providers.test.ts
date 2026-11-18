@@ -33,7 +33,7 @@ test("Tavily is basic, never auto-upgrades/retries, filters unsafe URLs and clip
     return Response.json({
       results: [
         { title: "bad", url: "javascript:alert(1)", content: "bad" },
-        { title: "ok", url: "https://example.org", content: "x".repeat(4000) },
+        { title: "ok", url: "https://example.org", content: "Complete paragraph.\n\n" + "x".repeat(4000) },
         { title: "duplicate", url: "https://example.org/", content: "duplicate" },
       ],
     });
@@ -41,7 +41,7 @@ test("Tavily is basic, never auto-upgrades/retries, filters unsafe URLs and clip
   const sources = await createProviders(readConfig({}), http).search("test", signal);
   expect(sources).toHaveLength(1);
   expect(sources[0]!.id).toBe(1);
-  expect(sources[0]!.snippet).toHaveLength(1500);
+  expect(sources[0]!.snippet).toBe("Complete paragraph.");
   expect(count).toBe(1);
   expect(safeUrl("https://user:password@example.org")).toBeNull();
 });
@@ -261,7 +261,7 @@ test("a token cap inside optional suggestions preserves the confirmed answer, wh
         'data: '+JSON.stringify({choices:[{delta:{},finish_reason:'length'}]})+'\n\ndata: [DONE]\n\n'));
     });
     const collect=async()=>{const generation=providers.answer('RSA',[{id:1,title:'RSA',url:'https://example.test',snippet:'Primes'}],[],signal);while(true){const part=await generation.next();if(part.done)return part.value;}};
-    if(footer) expect((await collect())?.id).toBe('openai/gpt-oss-20b');
+    if(footer) expect(await collect()).toMatchObject({id:'openai/gpt-oss-20b'});
     else await expect(collect()).rejects.toThrow('limit');
     expect(calls).toBe(1);
   }

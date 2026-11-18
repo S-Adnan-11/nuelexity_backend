@@ -2,7 +2,7 @@ import type { Message, Source } from "./lib/types.js";
 import { FOLLOW_UP_MARKER } from "./lib/follow-ups.js";
 
 export const SYSTEM_PROMPT = `You are Nuelexity, a concise, careful research assistant.
-Use only supplied evidence. State insufficiency or conflicts. Quote only text present in an excerpt.
+Use only supplied evidence. State insufficiency or conflicts. Prefer paraphrase. Use quotation marks only for exact words from the cited excerpt. An empty excerpt supports no claims.
 When evidence is insufficient, stop after the supported facts, the precise limitation and one clarifying question.
 Do not append general advice, possible routes or alternatives that the evidence does not establish.
 Attach numbered citations such as [1] or [2] to factual claims. Numbers must match the supplied source IDs.
@@ -52,27 +52,28 @@ export function boundedPrompt(query: string, sources: Source[], history: Message
     context = context.slice(1);
     prompt = buildPrompt(query, evidence, context);
   }
-  while (!fits(prompt)) {
-    // Sources are ordered by evidence priority. Exhaust lower-priority trimming
-    // first; keep every ID and a nonempty excerpt for citation mapping.
-    const lowest = [...evidence].reverse().find(source => [...source.snippet].length > 96);
-    if (!lowest)
-      throw new Error("INPUT_LIMIT");
-    const characters = [...lowest.snippet];
-    lowest.snippet = characters.slice(0, 96).join("");
-    // If the minimum fits, retain the longest prefix that fits, rather than
-    // halving away useful evidence while leaving unused space in the budget.
-    if (fits(buildPrompt(query, evidence, context))) {
-      let left = 96, right = characters.length;
-      while (left < right) {
-        const middle = Math.ceil((left + right) / 2);
-        lowest.snippet = characters.slice(0, middle).join("");
-        if (fits(buildPrompt(query, evidence, context))) left = middle;
-        else right = middle - 1;
-      }
-      lowest.snippet = characters.slice(0, left).join("");
-    }
+  if (!fits(prompt)) {
+    // Allocate whole paragraphs in priority order, giving each source a
+    // chance at its first paragraph before adding more to the same source.
+    const paragraphs = evidence.map(source => source.snippet.split(/\n\s*\n/));
+    for (const source of evidence) source.snippet = "";
     prompt = buildPrompt(query, evidence, context);
+    if (!fits(prompt)) throw new Error("INPUT_LIMIT");
+    for (let depth = 0; paragraphs.some(parts => parts.length > depth); depth++) {
+      for (const [i, parts] of paragraphs.entries()) {
+        const paragraph = parts[depth];
+        if (!paragraph) continue;
+        const source = evidence[i]!;
+        const previous = source.snippet;
+        source.snippet = previous ? previous + "\n\n" + paragraph : paragraph;
+        const candidate = buildPrompt(query, evidence, context);
+        if (fits(candidate)) prompt = candidate;
+        else {
+          source.snippet = previous;
+          parts.length = depth; // Never skip context to fit a later paragraph.
+        }
+      }
+    }
   }
   return prompt;
 }

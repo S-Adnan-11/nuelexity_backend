@@ -780,3 +780,15 @@ test("compressed JSON and malformed or oversized guest history use the normal pa
   expect(calls.reserves).toBe(0);
   expect(await (await post(JSON.stringify({query:"bounded example"}))).text()).toContain("event: done");
 });
+
+test("insufficient forward route evidence streams clarification with sources and no model attribution", async () => {
+  const config = readConfig({ AI_PROVIDER: "groq" });
+  const { ask, calls } = await fixture({ config: { aiProvider: "groq" }, providers: {
+    answer: createProviders(config, async () => { throw new Error("Unexpected model call"); }).answer,
+  }});
+  const response = await ask({query:"How do I get from Northport to Southport by bus?"});
+  const stream = await response.text();
+  expect(stream).toContain("Which destination town");
+  expect(stream).toContain('"model":null,"answerKind":"sources-only"');
+  expect(calls.reserves).toBe(1);
+});

@@ -62,16 +62,16 @@ test("ordinary evidence relevance, known freshness and stable ties preserve a us
 });
 
 test("UTF-8 prompt trimming preserves question, priority and every final source ID without mutating sources", () => {
-  const sources = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, title: "Evidence", url: `https://source.test/${i}`, snippet: "内容😹".repeat(250) }));
+  const sources = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, title: "Evidence", url: `https://source.test/${i}`, snippet: "内容😹。\n\n".repeat(250) }));
   const question = "Which town in Kogi is served?";
   const prompt = boundedPrompt(question, sources, history("old ".repeat(250)), 6000);
   expect(Buffer.byteLength(SYSTEM_PROMPT + prompt) + 128).toBeLessThanOrEqual(6000);
-  expect(Buffer.byteLength(SYSTEM_PROMPT + prompt) + 128).toBeGreaterThan(5996);
+  expect(prompt).not.toContain("�");
   const parsed = JSON.parse(prompt);
   expect(parsed.question).toBe(question);
   expect(parsed.untrustedSearchEvidence.map((s: {id: number}) => s.id)).toEqual([1,2,3,4,5]);
   expect(parsed.untrustedSearchEvidence[0].excerpt.length).toBeGreaterThanOrEqual(parsed.untrustedSearchEvidence[4].excerpt.length);
-  expect(sources[4]!.snippet).toBe("内容😹".repeat(250));
+  expect(sources[4]!.snippet).toBe("内容😹。\n\n".repeat(250));
   expect(SYSTEM_PROMPT).toContain("excerpt must support the associated claim");
   expect(SYSTEM_PROMPT).toContain("Never reverse a route listing");
   expect(SYSTEM_PROMPT).toContain("Missing listings do not prove");
@@ -107,4 +107,13 @@ test("product follow-ups require a clear prior user topic; unknown dates and cha
   expect(productRoute("Who created it?", [...history("What is Nuelexity?"), ...history("Explain photosynthesis")])).toBe("web");
   expect(productSources()[0]!.snippet).toContain("S. Adnan");
   expect(productSources()[1]!.snippet).toContain("not an exact start or launch date");
+});
+
+test("route clarification depends on forward service evidence and requested mode", async () => {
+  const { needsRouteClarification } = await import("../lib/route-evidence.js");
+  const q = "How can I get from Northport to Southport by bus?";
+  expect(needsRouteClarification(q, ["A bus runs from Northport to Southport on Sundays only."])).toBe(false);
+  for (const text of ["A bus runs from Southport to Northport.", "No bus runs from Northport to Southport.", "A train operates from Northport to Southport."])
+    expect(needsRouteClarification(q, [text])).toBe(true);
+  expect(needsRouteClarification("Explain RSA key generation", [])).toBe(false);
 });

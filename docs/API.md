@@ -117,3 +117,5 @@ All API responses are no-store and carry `X-Robots-Tag: noindex, nofollow`; auth
 ## Startup and recovery
 
 Use safe readiness or session reads to coordinate backend startup. Wait for readiness and normal auth/guest clearance before sending a question. The browser can keep editing the draft while waiting. Do not automatically replay a search or a verification token after a timeout; the server may already have accepted it. See [Render deployment](RENDER_DEPLOYMENT.md) for hosting behavior.
+
+For explicit point-to-point passenger questions, the API can return a clarification using the existing sources-only result and a null model. This occurs after quota reservation when the excerpts that fit in the prompt lack matching forward service evidence. The same check applies across selectable models. Source cards retain their original IDs even when a paragraph cannot fit in the model context.
