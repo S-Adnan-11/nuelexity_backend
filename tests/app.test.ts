@@ -124,6 +124,69 @@ async function fixture(
   return { base, ask, calls, config };
 }
 
+describe("first-party evidence through the existing search contract", () => {
+  test("guest and signed-in product answers reserve quotas, skip Tavily, and preserve model/source metadata", async () => {
+    for (const token of [undefined, "good"]) {
+      const { ask, calls, base } = await fixture({ config: { aiProvider: "groq" } });
+      const body = await (await ask({ query: "Who created Nuelexity?" }, token)).text();
+      expect(calls.searches).toBe(0);
+      expect(calls.guestChecks).toBe(token ? 0 : 1);
+      expect(calls.reserves).toBe(1);
+      expect(calls.releases).toBe(1);
+      expect(calls.answers).toBe(1);
+      expect(body).toContain('"answerKind":"ai"');
+      expect(body).toContain('"id":"openai/gpt-oss-20b"');
+      expect(body).toContain('"id":1,"title":"About Nuelexity"');
+      if (token) {
+        const saved = calls.saved[1]!;
+        const reloaded = await (await fetch(`${base}/conversations/${id}`, { headers: { Authorization: "Bearer good" } })).json();
+        expect(reloaded.messages[1].sources).toEqual(saved.sources);
+        expect(reloaded.messages[1].model).toEqual(saved.model);
+      }
+    }
+  });
+  test("mixed product questions combine evidence under five stable IDs; incidental mentions keep the web path", async () => {
+    let selected: import("../lib/types.js").Source[] = [];
+    const { ask, calls } = await fixture({ config: { aiProvider: "groq" }, providers: {
+      search: async () => Array.from({ length: 5 }, (_, i) => ({ id: i + 1, title: `Web ${i}`, url: `https://example.test/${i}`, snippet: "Public evidence" })),
+      answer: async function* (_query, sources) {
+        selected = sources; yield "Supported comparison [1] [3].";
+        return { ...APPROVED_MODELS[0], provider: "Groq" };
+      },
+    } });
+    const body = await (await ask({ query: "Compare Nuelexity with Perplexity" })).text();
+    expect(selected.map(s => s.id)).toEqual([1,2,3,4,5]);
+    expect(selected[0]!.url).toContain("/about");
+    expect(selected[2]!.url).toBe("https://example.test/0");
+    expect(body).toContain('"answerKind":"ai"');
+    expect(calls.reserves).toBe(1);
+    await (await ask({ query: "Using Nuelexity, explain photosynthesis" })).text();
+    expect(selected[0]!.url).toBe("https://example.test/0");
+  });
+  test("product-only sources mode makes zero search or generation HTTP calls; missing evidence remains no-sources", async () => {
+    const { ask, calls } = await fixture({ providers: {
+      answer: createProviders(readConfig({}), async () => { throw new Error("No provider HTTP"); }).answer,
+    } });
+    const body = await (await ask({ query: "What is Nuelexity?" })).text();
+    expect(calls.searches).toBe(0);
+    expect(body).toContain('"answerKind":"sources-only"');
+    expect(body).toContain('"model":null');
+    const empty = await fixture({ providers: { search: async () => [],
+      answer: createProviders(readConfig({ AI_PROVIDER: "groq" }), async () => { throw new Error("No provider HTTP"); }).answer,
+    } });
+    const noSources = await (await empty.ask({ query: "Unrelated research question" })).text();
+    expect(noSources).toContain('"answerKind":"no-sources"');
+  });
+  test("a denied product request still fails before all provider work", async () => {
+    const { ask, calls } = await fixture({ store: { reserve: async () => ({ allowed: false, code: "DAILY_LIMIT", retryAfter: 42 }) } });
+    const response = await ask({ query: "What is Nuelexity?" });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("42");
+    expect(calls.searches).toBe(0);
+    expect(calls.answers).toBe(0);
+  });
+});
+
 describe("guest verification session", () => {
   test("one verified pass covers repeated searches and refreshed session checks without resetting quota identity", async () => {
     const { base, ask, calls } = await fixture({ turnstile: true });
@@ -703,4 +766,29 @@ test('Render IP-bound pass survives app restart and ignores spoofed unrelated fo
   expect((await check('203.0.113.1')).verified).toBe(true);
   expect((await check('203.0.113.2')).verified).toBe(false);
   expect((await fetch(restarted.base + '/guest/session')).status).toBe(503);
+});
+
+test("compressed JSON and malformed or oversized guest history use the normal parser and validation", async () => {
+  const { gzipSync } = await import("node:zlib");
+  const { base, calls, ask } = await fixture();
+  const post = (json: string) => fetch(base + "/nuelexity_ask", {
+    method: "POST", headers: { "Content-Type": "application/json", "Content-Encoding": "gzip" },
+    body: new Uint8Array(gzipSync(json)),
+  });
+  expect((await post("{")).status).toBe(400);
+  expect((await ask({ query: "test", history: Array.from({ length: 7 }, () => ({role:"user", content:"a"})) })).status).toBe(400);
+  expect(calls.reserves).toBe(0);
+  expect(await (await post(JSON.stringify({query:"bounded example"}))).text()).toContain("event: done");
+});
+
+test("insufficient forward route evidence streams clarification with sources and no model attribution", async () => {
+  const config = readConfig({ AI_PROVIDER: "groq" });
+  const { ask, calls } = await fixture({ config: { aiProvider: "groq" }, providers: {
+    answer: createProviders(config, async () => { throw new Error("Unexpected model call"); }).answer,
+  }});
+  const response = await ask({query:"How do I get from Northport to Southport by bus?"});
+  const stream = await response.text();
+  expect(stream).toContain("What date should I check");
+  expect(stream).toContain('"model":null,"answerKind":"sources-only"');
+  expect(calls.reserves).toBe(1);
 });

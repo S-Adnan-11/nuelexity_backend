@@ -6,10 +6,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { createApp } from "../dist/app.js";
 import { readConfig } from "../dist/lib/config.js";
 import { APPROVED_MODELS, modelCatalogue } from "../dist/lib/models.js";
 import { FOLLOW_UP_MARKER } from "../dist/lib/follow-ups.js";
+// Optional local compiled baseline for verifying the previous API with this UI.
+const { createApp } = await import(process.env.BROWSER_BACKEND_MODULE || "../dist/app.js");
 
 // Real compiled HTTP/SSE handlers and real frontend bundle; only services are faked.
 const frontend = path.resolve(process.argv[2] || "../../frontend/nuelexity_frontend/dist");
@@ -97,6 +98,9 @@ try {
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   await command("Page.enable");
   await command("Page.navigate", { url: base });
+  await until(() => evaluate("!!document.querySelector('#question, .eligibility-page')"), "research entry or eligibility");
+  if (await evaluate("!!document.querySelector('.eligibility-page')"))
+    await evaluate("document.querySelectorAll('.eligibility-page input[type=checkbox]').forEach(input=>input.click()); document.querySelector('.eligibility-page form button[type=submit]').click()");
   await until(() => evaluate("!!document.querySelector('#question')"), "real research UI");
   await submit("Explain RSA key generation");
   await until(() => evaluate("!!document.querySelector('[aria-label=\"Stop search\"]')"), "live Node stream");

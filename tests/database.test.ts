@@ -47,6 +47,30 @@ async function release(subject: string, id: string) {
 }
 
 describe("durable budget reservations", () => {
+  test("new personal ceilings keep shared counters atomic and leases independent of model/tab changes", async () => {
+    for (const [subject, ceiling] of [[`guest:${ip}`, 3], [`user:${owner}`, 7]] as const) {
+      await db.exec("truncate public.nuelexity_usage, public.nuelexity_leases");
+      for (let attempt = 0; attempt < ceiling; attempt++) {
+        const result = await reserve(subject, ip, [ceiling,12,25,800,30]);
+        expect(result).toMatchObject({ allowed: true, remaining: ceiling - attempt - 1 });
+        await release(subject, result.id);
+      }
+      const results = await Promise.all(Array.from({ length: 3 }, () => reserve(subject, ip, [ceiling,12,25,800,30])));
+      expect(results.every(result => !result.allowed && result.code === "DAILY_LIMIT")).toBe(true);
+      const count = await db.query<{requests: number}>("select requests from public.nuelexity_usage where subject='global' and bucket='month'");
+      expect(count.rows[0]!.requests).toBe(ceiling);
+    }
+  });
+  test("previous UTC month and minute buckets do not consume the current shared budget", async () => {
+    await db.exec(`set timezone='Pacific/Honolulu';
+      insert into public.nuelexity_usage values
+      ('global','month',date_trunc('month',now() at time zone 'UTC') at time zone 'UTC' - interval '1 month',800),
+      ('global','minute',date_trunc('minute',now() at time zone 'UTC') at time zone 'UTC' - interval '1 minute',4);`);
+    expect(await reserve(`guest:${ip}`,ip,[3,12,25,800,4])).toMatchObject({allowed:true,remaining:2});
+    const month = await db.query<{utc: string}>("select to_char(period_start at time zone 'UTC','DD HH24:MI') as utc from public.nuelexity_usage where subject='global' and bucket='month' order by period_start desc limit 1");
+    expect(month.rows[0]!.utc).toBe("01 00:00");
+    await db.exec("set timezone='UTC'");
+  });
   test("counts guest attempts and enforces daily cap after leases release", async () => {
     const subject = `guest:${ip}`;
     const first = await reserve();

@@ -17,6 +17,8 @@ import { APPROVED_MODELS, selectModel } from "./lib/models.js";
 import type { ModelAttribution } from "./lib/models.js";
 import { createReadiness } from "./lib/readiness.js";
 import { clientIp } from "./lib/client-ip.js";
+import { combineSources, retrievalQuery } from "./lib/retrieval.js";
+import { productRoute, productSources } from "./lib/product-knowledge.js";
 
 const askSchema = z
   .object({
@@ -373,21 +375,22 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
       heartbeat = setInterval(() => {
         if (!res.destroyed && !signal.aborted && !res.writableNeedDrain) res.write(": keep-alive\n\n");
       }, 10000);
-      // Short follow-ups get the last user question as extra retrieval context.
-      const lastQuestion = [...history].reverse().find((m) => m.role === "user")?.content;
-      const retrievalQuery = lastQuestion
-        ? `${lastQuestion.slice(0, 400)}\nFollow-up: ${input.query}`.slice(0, 1000)
-        : input.query;
-      sources = await providers.search(retrievalQuery, signal);
+      const route = productRoute(input.query, history);
+      const firstParty = route === "web" ? [] : productSources();
+      const web = route === "product" ? [] : await providers.search(retrievalQuery(input.query, history), signal);
+      // Freeze the final IDs once, before streaming, generation or persistence.
+      sources = combineSources(firstParty, web);
       await send("sources", { sources });
       await send("status", { stage: "answering" });
       const generation = providers.answer(input.query, sources, history, signal, requestedModel);
+      let clarified = false;
       const sections = new AnswerSections();
       try {
         while (true) {
           const chunk = await generation.next();
           if (chunk.done) {
-            actualModel = chunk.value;
+            clarified = chunk.value === "clarification";
+            actualModel = chunk.value === "clarification" ? null : chunk.value;
             break;
           }
           const text = sections.push(chunk.value);
@@ -410,7 +413,7 @@ export function createApp(options: { config?: Config; store?: Store; providers?:
           "No answer was returned. Your sources are still available.",
         );
       signal.throwIfAborted();
-      const answerKind = !sources.length ? "no-sources" : config.aiProvider === "none" ? "sources-only" : "ai";
+      const answerKind = !sources.length ? "no-sources" : clarified || config.aiProvider === "none" ? "sources-only" : "ai";
       const suggestions = answerKind === "ai" ? sections.suggestions(input.query, answer, sources, history) : [];
       if (answerKind === "ai" && (!actualModel || actualModel.id !== requestedModel))
         throw new AppError(502, "MODEL_UNCONFIRMED", "The answer's model could not be confirmed. Try again later.");

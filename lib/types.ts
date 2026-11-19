@@ -60,6 +60,6 @@ export interface Providers {
     signal: AbortSignal,
     modelId?: string,
     maxOutputTokens?: number,
-  ): AsyncGenerator<string, ModelAttribution | null>;
+  ): AsyncGenerator<string, ModelAttribution | "clarification" | null>;
   verifyGuest(token: string, ip: string, signal: AbortSignal): Promise<void>;
 }

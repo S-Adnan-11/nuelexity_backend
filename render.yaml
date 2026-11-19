@@ -32,11 +32,11 @@ services:
       - key: REQUEST_TIMEOUT_MS
         value: '60000'
       - key: GUEST_DAILY_LIMIT
-        value: '2'
+        value: '3'
       - key: USER_DAILY_LIMIT
-        value: '5'
+        value: '7'
       - key: IP_DAILY_LIMIT
-        value: '10'
+        value: '12'
       - key: GLOBAL_DAILY_LIMIT
         value: '25'
       - key: GLOBAL_MONTHLY_LIMIT

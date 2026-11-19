@@ -6,9 +6,9 @@ export function readConfig(env: Record<string, string | undefined> = process.env
   const config = z
     .object({
       port: integer(3002, 65535),
-      guestDaily: integer(2, 10),
-      userDaily: integer(5, 50),
-      ipDaily: integer(10, 100),
+      guestDaily: integer(3, 10),
+      userDaily: integer(7, 50),
+      ipDaily: integer(12, 100),
       globalDaily: integer(25, 1000),
       globalMonthly: integer(800, 1000),
       globalMinute: integer(4, 30),

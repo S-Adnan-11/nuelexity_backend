@@ -28,12 +28,12 @@ test("Tavily is basic, never auto-upgrades/retries, filters unsafe URLs and clip
       search_depth: "basic",
       auto_parameters: false,
       include_answer: false,
-      max_results: 5,
+      max_results: 8,
     });
     return Response.json({
       results: [
         { title: "bad", url: "javascript:alert(1)", content: "bad" },
-        { title: "ok", url: "https://example.org", content: "x".repeat(4000) },
+        { title: "ok", url: "https://example.org", content: "Complete paragraph.\n\n" + "x".repeat(4000) },
         { title: "duplicate", url: "https://example.org/", content: "duplicate" },
       ],
     });
@@ -41,7 +41,7 @@ test("Tavily is basic, never auto-upgrades/retries, filters unsafe URLs and clip
   const sources = await createProviders(readConfig({}), http).search("test", signal);
   expect(sources).toHaveLength(1);
   expect(sources[0]!.id).toBe(1);
-  expect(sources[0]!.snippet).toHaveLength(1500);
+  expect(sources[0]!.snippet).toBe("Complete paragraph.");
   expect(count).toBe(1);
   expect(safeUrl("https://user:password@example.org")).toBeNull();
 });
@@ -59,6 +59,15 @@ test("sources-only mode never calls a model and labels excerpts honestly", async
     text += delta;
   expect(text).toContain("not an AI-synthesized answer");
   expect(text).toContain("Evidence");
+});
+
+test("search provider throttling exposes timing without a retry or model call", async () => {
+  let calls = 0;
+  const providers = createProviders(readConfig({}), async () => {
+    calls++; return new Response(null, { status: 429, headers: { "Retry-After": "21" } });
+  });
+  await expect(providers.search("Synthetic query", signal)).rejects.toMatchObject({ code: "SEARCH_RATE_LIMIT", retryAfter: 21 });
+  expect(calls).toBe(1);
 });
 test("Groq streams all deltas and requires successful finish plus done", async () => {
   const config = readConfig({ AI_PROVIDER: "groq" });
@@ -252,7 +261,7 @@ test("a token cap inside optional suggestions preserves the confirmed answer, wh
         'data: '+JSON.stringify({choices:[{delta:{},finish_reason:'length'}]})+'\n\ndata: [DONE]\n\n'));
     });
     const collect=async()=>{const generation=providers.answer('RSA',[{id:1,title:'RSA',url:'https://example.test',snippet:'Primes'}],[],signal);while(true){const part=await generation.next();if(part.done)return part.value;}};
-    if(footer) expect((await collect())?.id).toBe('openai/gpt-oss-20b');
+    if(footer) expect(await collect()).toMatchObject({id:'openai/gpt-oss-20b'});
     else await expect(collect()).rejects.toThrow('limit');
     expect(calls).toBe(1);
   }

@@ -1,3 +1,4 @@
+import { routeClarification } from "./route-evidence.js";
 import { boundedJson } from "./bounded-json.js";
 import { z } from "zod";
 import { boundedPrompt, SYSTEM_PROMPT } from "../prompts.js";
@@ -8,17 +9,9 @@ import type { Providers, Source } from "./types.js";
 import { APPROVED_MODELS, modelCatalogue } from "./models.js";
 import type { ModelAttribution, ModelCatalogue } from "./models.js";
 import { AnswerSections } from "./follow-ups.js";
+import { selectSources } from "./retrieval.js";
+export { safeUrl } from "./retrieval.js";
 
-export function safeUrl(value: string): string | null {
-  try {
-    const url = new URL(value);
-    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
-      ? url.href
-      : null;
-  } catch {
-    return null;
-  }
-}
 const resultsSchema = z.object({
   results: z
     .array(
@@ -26,6 +19,8 @@ const resultsSchema = z.object({
         title: z.string(),
         url: z.string(),
         content: z.string().nullish(),
+        score: z.number().min(0).max(1).optional(),
+        published_date: z.string().nullish(),
       }),
     )
     .max(20),
@@ -95,13 +90,16 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
         body: JSON.stringify({
           query,
           search_depth: "basic",
-          max_results: 5,
+          max_results: 8,
           auto_parameters: false,
           include_answer: false,
           include_raw_content: false,
         }),
         signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
       });
+      if (response.status === 429)
+        throw new AppError(429, "SEARCH_RATE_LIMIT", "The search provider is busy or has reached its allowance. Try again later.",
+          Number(response.headers.get("Retry-After")) || 60);
       if (!response.ok)
         throw new AppError(
           503,
@@ -111,21 +109,7 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
       const parsed = resultsSchema.safeParse(await boundedJson(response, 262144));
       if (!parsed.success)
         throw new AppError(502, "INVALID_SEARCH", "Web search returned an invalid response.");
-      const seen = new Set<string>();
-      const sources: Source[] = [];
-      for (const item of parsed.data.results) {
-        const url = safeUrl(item.url);
-        if (!url || seen.has(url)) continue;
-        seen.add(url);
-        sources.push({
-          id: sources.length + 1,
-          title: item.title.slice(0, 200),
-          url,
-          snippet: (item.content || "").slice(0, 1500),
-        });
-        if (sources.length === 5) break;
-      }
-      return sources;
+      return selectSources(query, parsed.data.results);
     },
     async *answer(query, sources, history, signal, modelId = config.groqModel, maxOutputTokens) {
       if (!sources.length) {
@@ -155,6 +139,13 @@ export function createProviders(config: Config, http: ProviderFetch = fetch): Pr
           "INPUT_LIMIT",
           "This question exceeds the model input limit. Try a shorter question.",
         );
+      }
+      const evidence = JSON.parse(prompt).untrustedSearchEvidence as { excerpt: string }[];
+      const clarification = routeClarification(query, evidence.map(source => source.excerpt),
+        history.filter(turn => turn.role === "user" && turn.status === "complete").slice(-6).map(turn => turn.content));
+      if (clarification) {
+        yield clarification;
+        return "clarification";
       }
       const response = await http("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
